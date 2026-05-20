@@ -13,29 +13,40 @@ void tearDown() {}
 
 void test_eagain_is_not_fatal_accept_error() {
   TEST_ASSERT_FALSE(forward_accept_error::isFatal(
-      kEagain, kEagain, kChannelUnknown, kChannelClosed, kSocketSend,
-      kSocketDisconnect));
+      kEagain, kEagain, kChannelClosed, kSocketSend, kSocketDisconnect));
 }
 
-void test_channel_unknown_is_fatal_accept_error() {
+void test_channel_unknown_is_not_fatal_accept_error() {
+  TEST_ASSERT_FALSE(forward_accept_error::isFatal(
+      kChannelUnknown, kEagain, kChannelClosed, kSocketSend, kSocketDisconnect));
+}
+
+void test_channel_closed_is_fatal_accept_error() {
   TEST_ASSERT_TRUE(forward_accept_error::isFatal(
-      kChannelUnknown, kEagain, kChannelUnknown, kChannelClosed, kSocketSend,
-      kSocketDisconnect));
+      kChannelClosed, kEagain, kChannelClosed, kSocketSend, kSocketDisconnect));
 }
 
 void test_reconnect_after_repeated_fatal_accept_errors() {
   TEST_ASSERT_FALSE(forward_accept_error::shouldReconnectAfterConsecutiveErrors(
-      2, kChannelUnknown, kEagain, kChannelUnknown, kChannelClosed, kSocketSend,
+      2, kChannelClosed, kEagain, kChannelClosed, kSocketSend,
       kSocketDisconnect));
   TEST_ASSERT_TRUE(forward_accept_error::shouldReconnectAfterConsecutiveErrors(
-      3, kChannelUnknown, kEagain, kChannelUnknown, kChannelClosed, kSocketSend,
+      3, kChannelClosed, kEagain, kChannelClosed, kSocketSend,
+      kSocketDisconnect));
+}
+
+void test_no_reconnect_on_repeated_channel_unknown() {
+  TEST_ASSERT_FALSE(forward_accept_error::shouldReconnectAfterConsecutiveErrors(
+      3, kChannelUnknown, kEagain, kChannelClosed, kSocketSend,
       kSocketDisconnect));
 }
 
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_eagain_is_not_fatal_accept_error);
-  RUN_TEST(test_channel_unknown_is_fatal_accept_error);
+  RUN_TEST(test_channel_unknown_is_not_fatal_accept_error);
+  RUN_TEST(test_channel_closed_is_fatal_accept_error);
   RUN_TEST(test_reconnect_after_repeated_fatal_accept_errors);
+  RUN_TEST(test_no_reconnect_on_repeated_channel_unknown);
   return UNITY_END();
 }

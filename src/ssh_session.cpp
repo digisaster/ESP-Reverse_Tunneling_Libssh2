@@ -243,16 +243,15 @@ void SSHSession::recordAcceptNoChannel(int err) {
 
 bool SSHSession::isFatalAcceptError(int err) const {
   return forward_accept_error::isFatal(
-      err, LIBSSH2_ERROR_EAGAIN, LIBSSH2_ERROR_CHANNEL_UNKNOWN,
-      LIBSSH2_ERROR_CHANNEL_CLOSED, LIBSSH2_ERROR_SOCKET_SEND,
-      LIBSSH2_ERROR_SOCKET_DISCONNECT);
+      err, LIBSSH2_ERROR_EAGAIN, LIBSSH2_ERROR_CHANNEL_CLOSED,
+      LIBSSH2_ERROR_SOCKET_SEND, LIBSSH2_ERROR_SOCKET_DISCONNECT);
 }
 
 bool SSHSession::hasFatalAcceptFailure() const {
   return forward_accept_error::shouldReconnectAfterConsecutiveErrors(
       consecutiveFatalAcceptErrors_, lastAcceptError_, LIBSSH2_ERROR_EAGAIN,
-      LIBSSH2_ERROR_CHANNEL_UNKNOWN, LIBSSH2_ERROR_CHANNEL_CLOSED,
-      LIBSSH2_ERROR_SOCKET_SEND, LIBSSH2_ERROR_SOCKET_DISCONNECT);
+      LIBSSH2_ERROR_CHANNEL_CLOSED, LIBSSH2_ERROR_SOCKET_SEND,
+      LIBSSH2_ERROR_SOCKET_DISCONNECT);
 }
 
 LIBSSH2_CHANNEL *SSHSession::acceptChannel(TunnelConfig &outMapping) {
