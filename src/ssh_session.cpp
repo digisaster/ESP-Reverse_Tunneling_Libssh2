@@ -305,15 +305,16 @@ void SSHSession::recordAcceptNoChannel(int err) {
 
 bool SSHSession::isFatalAcceptError(int err) const {
   return forward_accept_error::isFatal(
-      err, LIBSSH2_ERROR_EAGAIN, LIBSSH2_ERROR_CHANNEL_CLOSED,
-      LIBSSH2_ERROR_SOCKET_SEND, LIBSSH2_ERROR_SOCKET_DISCONNECT);
+      err, LIBSSH2_ERROR_EAGAIN, LIBSSH2_ERROR_CHANNEL_UNKNOWN,
+      LIBSSH2_ERROR_CHANNEL_CLOSED, LIBSSH2_ERROR_SOCKET_SEND,
+      LIBSSH2_ERROR_SOCKET_DISCONNECT);
 }
 
 bool SSHSession::hasFatalAcceptFailure() const {
   return forward_accept_error::shouldReconnectAfterConsecutiveErrors(
       consecutiveFatalAcceptErrors_, lastAcceptError_, LIBSSH2_ERROR_EAGAIN,
-      LIBSSH2_ERROR_CHANNEL_CLOSED, LIBSSH2_ERROR_SOCKET_SEND,
-      LIBSSH2_ERROR_SOCKET_DISCONNECT);
+      LIBSSH2_ERROR_CHANNEL_UNKNOWN, LIBSSH2_ERROR_CHANNEL_CLOSED,
+      LIBSSH2_ERROR_SOCKET_SEND, LIBSSH2_ERROR_SOCKET_DISCONNECT);
 }
 
 LIBSSH2_CHANNEL *SSHSession::acceptChannel(TunnelConfig &outMapping) {
@@ -543,9 +544,7 @@ bool SSHSession::handshake() {
   // Add LIBSSH2_TRACE_TRANS if you also need per-packet visibility (very
   // chatty — thousands of lines/sec on a busy session).
   libssh2_trace_sethandler(session_, this, libssh2TraceToLogger);
-  // TEMPORAIRE: CONN | TRANS pour diagnostiquer la flood CHANNEL_UNKNOWN à T+90s.
-  // À remettre à juste LIBSSH2_TRACE_CONN une fois le diag terminé.
-  libssh2_trace(session_, LIBSSH2_TRACE_CONN | LIBSSH2_TRACE_TRANS);
+  libssh2_trace(session_, LIBSSH2_TRACE_CONN);
 #endif
 
   // Session stays BLOCKING during setup (handshake, auth, listeners).
