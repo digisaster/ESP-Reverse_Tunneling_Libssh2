@@ -70,6 +70,12 @@ public:
   static constexpr int MAX_CLOSE_EVENTS = 32;
   int consumeCloseEvents(CloseEvent *out, int maxEvents);
 
+  // Set when checkCloses() had to hard-abandon a stuck Draining channel.
+  // Signals the tunnel that the SSH session can no longer be trusted to flush
+  // pending channel writes and a full reconnect is warranted.
+  bool sessionDegraded() const { return sessionDegraded_; }
+  void clearSessionDegraded() { sessionDegraded_ = false; }
+
 #ifdef TUNNEL_INSTRUMENT
   static constexpr int INSTR_MAX_CHANNELS = 8;
   // Format current cumulative instrumentation into a single line. Returns
@@ -99,6 +105,10 @@ private:
       16384; // Max SSH write per channel per round
   static constexpr unsigned long DRAIN_TIMEOUT_MS =
       15000; // Max time in Draining state
+  static constexpr unsigned long HARD_ABANDON_TIMEOUT_MS =
+      30000; // Force-abandon a Draining channel after this long. Past this
+             // deadline libssh2_channel_close is presumed stuck (window
+             // exhausted, peer not consuming) and the session is degraded.
   static constexpr unsigned long HALF_CLOSE_TIMEOUT_MS =
       5000; // Close after remote EOF + 5s idle (tolerates slow backends: DB
             // queries, external APIs). Active streams update lastActivity so
@@ -124,6 +134,8 @@ private:
   // Pending close events (filled by checkCloses, drained by consumeCloseEvents)
   CloseEvent pendingCloseEvents_[MAX_CLOSE_EVENTS];
   int pendingCloseCount_ = 0;
+
+  bool sessionDegraded_ = false;
 
 #ifdef TUNNEL_INSTRUMENT
   // Wrap libssh2_channel_read with timing + counters. slotIdx may be -1 if

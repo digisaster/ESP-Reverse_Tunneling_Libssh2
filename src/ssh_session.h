@@ -129,6 +129,10 @@ private:
   std::vector<ListenerEntry> listeners_;
   int boundPort_ = -1;
   int keepAliveFailures_ = 0;
+  // Diagnostics for keep-alive failures (timing + last error context).
+  unsigned long sessionConnectedMs_ = 0;
+  unsigned long lastKeepaliveOkMs_ = 0;
+  unsigned long lastKeepaliveAttemptMs_ = 0;
   int lastAcceptError_ = 0;
   int consecutiveFatalAcceptErrors_ = 0;
   unsigned long lastAcceptMs_ = 0;

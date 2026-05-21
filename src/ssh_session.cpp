@@ -150,6 +150,10 @@ bool SSHSession::connect(SSHConfiguration *config) {
   // TransportPump needs non-blocking for channel_read/write.
   libssh2_session_set_blocking(session_, 0);
 
+  sessionConnectedMs_ = millis();
+  lastKeepaliveOkMs_ = sessionConnectedMs_;
+  lastKeepaliveAttemptMs_ = 0;
+
   LOG_I("SSH", "SSH session fully connected (non-blocking mode active)");
   return true;
 }
@@ -168,24 +172,76 @@ bool SSHSession::sendKeepalive() {
     return false;
   }
 
+  const unsigned long nowMs = millis();
+  const unsigned long sinceOk =
+      lastKeepaliveOkMs_ ? (nowMs - lastKeepaliveOkMs_) : 0;
+  const unsigned long sinceConn =
+      sessionConnectedMs_ ? (nowMs - sessionConnectedMs_) : 0;
+  const unsigned long sinceAttempt =
+      lastKeepaliveAttemptMs_ ? (nowMs - lastKeepaliveAttemptMs_) : 0;
+  lastKeepaliveAttemptMs_ = nowMs;
+
   int seconds = 0;
   int rc = LIBSSH2_ERROR_EAGAIN;
+  int sysErrno = 0;
+  int libssh2Errno = 0;
+  char libssh2Msg[128] = {0};
+
   if (lock(pdMS_TO_TICKS(200))) {
+    errno = 0;
     rc = libssh2_keepalive_send(session_, &seconds);
+    // Capture errno BEFORE unlock (mutex syscall could clobber it).
+    sysErrno = errno;
+    if (rc != 0 && rc != LIBSSH2_ERROR_EAGAIN) {
+      char *errmsg = nullptr;
+      int errmsgLen = 0;
+      libssh2Errno = libssh2_session_last_error(session_, &errmsg, &errmsgLen,
+                                                /*want_buf=*/0);
+      if (errmsg && errmsgLen > 0) {
+        size_t n = static_cast<size_t>(errmsgLen) < sizeof(libssh2Msg) - 1
+                       ? static_cast<size_t>(errmsgLen)
+                       : sizeof(libssh2Msg) - 1;
+        memcpy(libssh2Msg, errmsg, n);
+        libssh2Msg[n] = '\0';
+      }
+    }
     unlock();
   } else {
-    LOG_W("SSH", "Keep-alive skipped (session lock timeout)");
+    LOGF_W("SSH",
+           "Keep-alive skipped (session lock timeout) since_ok=%lums "
+           "since_conn=%lums",
+           sinceOk, sinceConn);
     return true; // Not fatal
   }
 
   if (rc == 0) {
     keepAliveFailures_ = 0;
-    LOGF_D("SSH", "Keep-alive sent, next in %d seconds", seconds);
+    lastKeepaliveOkMs_ = nowMs;
+    LOGF_D("SSH",
+           "Keep-alive sent, next in %ds (since_prev_attempt=%lums "
+           "since_conn=%lums)",
+           seconds, sinceAttempt, sinceConn);
     return true;
   }
+
+  // Snapshot socket-level state AFTER the failed send (errno from send()
+  // may have been clobbered already; SO_ERROR/getsockopt re-reads pending).
+  int soError = 0;
+  int soGetRc = -1;
+  if (socketfd_ >= 0) {
+    socklen_t soLen = sizeof(soError);
+    soGetRc = getsockopt(socketfd_, SOL_SOCKET, SO_ERROR, &soError, &soLen);
+  }
+
   if (rc == LIBSSH2_ERROR_SOCKET_SEND) {
     keepAliveFailures_++;
-    LOGF_W("SSH", "Keep-alive failed: %d (%d/3)", rc, keepAliveFailures_);
+    LOGF_W("SSH",
+           "Keep-alive failed: %d (%d/3) errno=%d(%s) "
+           "libssh2_errno=%d libssh2_msg=\"%s\" so_error=%d so_rc=%d "
+           "since_ok=%lums since_conn=%lums since_prev_attempt=%lums fd=%d",
+           rc, keepAliveFailures_, sysErrno,
+           sysErrno ? strerror(sysErrno) : "0", libssh2Errno, libssh2Msg,
+           soError, soGetRc, sinceOk, sinceConn, sinceAttempt, socketfd_);
     if (keepAliveFailures_ >= 3) {
       LOG_W("SSH", "Keep-alive socket send failed 3 times");
       keepAliveFailures_ = 0;
@@ -195,7 +251,11 @@ bool SSHSession::sendKeepalive() {
   }
   if (rc != LIBSSH2_ERROR_EAGAIN) {
     keepAliveFailures_ = 0;
-    LOGF_W("SSH", "Keep-alive failed: %d", rc);
+    LOGF_W("SSH",
+           "Keep-alive failed: %d errno=%d(%s) libssh2_errno=%d "
+           "libssh2_msg=\"%s\" so_error=%d since_ok=%lums since_conn=%lums",
+           rc, sysErrno, sysErrno ? strerror(sysErrno) : "0", libssh2Errno,
+           libssh2Msg, soError, sinceOk, sinceConn);
   }
   return true;
 }
@@ -998,5 +1058,8 @@ void SSHSession::cleanupSession() {
   }
 
   keepAliveFailures_ = 0;
+  sessionConnectedMs_ = 0;
+  lastKeepaliveOkMs_ = 0;
+  lastKeepaliveAttemptMs_ = 0;
   resetAcceptState();
 }

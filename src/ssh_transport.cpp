@@ -984,6 +984,27 @@ void TransportPump::checkCloses() {
     bool timedOut = (now - ch.closeStartMs) > DRAIN_TIMEOUT_MS;
     bool tooManyErrors = ch.consecutiveErrors > 3;
 
+    // Hard deadline. The regular drain timeout above only marks the channel
+    // for finalizeClose(); when libssh2_channel_close keeps returning EAGAIN
+    // (channel write window saturated, peer not consuming) finalizeClose
+    // returns false and the slot stays Draining forever. Past this point we
+    // abandon the slot locally and let the tunnel reconnect — the SSH
+    // session is degraded if it can't drain a single channel for 30 s.
+    if ((now - ch.closeStartMs) > HARD_ABANDON_TIMEOUT_MS) {
+      ChannelCloseReason reason = ch.closeReason;
+      LOGF_W("SSH",
+             "Channel %d: hard abandon (stuck draining %lums, toLocal=%zu, "
+             "toRemote=%zu) — session degraded",
+             i, now - ch.closeStartMs, ch.toLocal ? ch.toLocal->size() : 0,
+             ch.toRemote ? ch.toRemote->size() : 0);
+      channels_->abandonSlot(i, reason);
+      sessionDegraded_ = true;
+      if (pendingCloseCount_ < MAX_CLOSE_EVENTS) {
+        pendingCloseEvents_[pendingCloseCount_++] = {i, reason};
+      }
+      continue;
+    }
+
     if (timedOut) {
       LOGF_W("SSH",
              "Channel %d: drain timeout (%lums, toLocal=%zu, toRemote=%zu)", i,

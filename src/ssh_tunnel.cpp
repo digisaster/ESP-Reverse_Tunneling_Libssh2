@@ -239,6 +239,15 @@ void SSHTunnel::loop() {
     emitChannelClosed(closeEvents[i].slot, closeEvents[i].reason);
   }
 
+  // If pumpAll had to hard-abandon a stuck channel, the SSH session can't
+  // be trusted to drain — reconnect rather than risk other channels stalling
+  // the same way on the same session.
+  if (transport_.sessionDegraded()) {
+    transport_.clearSessionDegraded();
+    enterErrorState("channel drain stuck");
+    return;
+  }
+
   // Drain pending queue into freshly freed slots
   if (pendingCount_ > 0) {
     cleanExpiredPending();
