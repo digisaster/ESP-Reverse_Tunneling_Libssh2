@@ -314,7 +314,8 @@ bool SSHSession::hasFatalAcceptFailure() const {
       LIBSSH2_ERROR_SOCKET_DISCONNECT);
 }
 
-LIBSSH2_CHANNEL *SSHSession::acceptChannel(TunnelConfig &outMapping) {
+LIBSSH2_CHANNEL *SSHSession::acceptChannel(TunnelConfig &outMapping,
+                                           TickType_t lockTimeout) {
   if (!session_ || listeners_.empty()) {
     return nullptr;
   }
@@ -331,12 +332,7 @@ LIBSSH2_CHANNEL *SSHSession::acceptChannel(TunnelConfig &outMapping) {
     unsigned long pollNow = millis();
     acceptDiag_.recordPoll(pollNow);
 #endif
-    // 500ms (vs 50ms) garantit que forward_accept passe régulièrement même
-    // sous charge pumpAll soutenue : il draine la file d'entrée libssh2 et
-    // déclenche les réponses auto aux SSH_MSG_GLOBAL_REQUEST keepalive du
-    // serveur. Avec 50ms, en trafic HTTP forwardé, l'accept était skip
-    // assez souvent pour que sshd atteigne ClientAliveCountMax et RST.
-    if (!lock(pdMS_TO_TICKS(500))) {
+    if (!lock(lockTimeout)) {
 #ifdef TUNNEL_DIAG_LOG_ONLY
       acceptDiag_.recordLockUnavailable(millis());
       LOGF_W("SSH",
