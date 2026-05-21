@@ -66,7 +66,7 @@ struct ConnectionConfig {
 
   // Default constructor
   ConnectionConfig()
-      : keepAliveIntervalSec(30), reconnectDelayMs(5000),
+      : keepAliveIntervalSec(10), reconnectDelayMs(5000),
         maxReconnectAttempts(5), connectionTimeoutSec(30), bufferSize(8192),
         maxChannels(10), libssh2KeepAliveEnabled(true),
         libssh2KeepAliveIntervalSec(30), tunnelRingBufferSize(64 * 1024),
