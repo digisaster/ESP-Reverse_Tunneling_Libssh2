@@ -99,15 +99,8 @@ public:
 #endif
 
 private:
-  // Accept pending SSH channel and bind to a local socket.
-  // lockTimeout overrides the per-listener session-lock acquisition timeout;
-  // the default (50ms) matches the hot polling path. The periodic force-drain
-  // block in loop() passes a larger value to guarantee that
-  // libssh2_channel_forward_accept runs even when pumpAll keeps the lock
-  // busy — this is what triggers libssh2 to auto-reply to server-side
-  // SSH_MSG_GLOBAL_REQUEST keepalive pings (otherwise sshd hits
-  // ClientAliveCountMax and RSTs the session).
-  bool handleNewConnection(TickType_t lockTimeout = pdMS_TO_TICKS(50));
+  // Accept pending SSH channel and bind to a local socket
+  bool handleNewConnection();
 
   // Drain queued connections into newly freed slots
   void drainPendingQueue();
@@ -150,18 +143,8 @@ private:
   TunnelState state_ = TUNNEL_DISCONNECTED;
   unsigned long lastKeepAlive_ = 0;
   unsigned long lastConnectionAttempt_ = 0;
-  unsigned long lastForceDrainMs_ = 0;
   int reconnectAttempts_ = 0;
   int socketHealthFailures_ = 0;
-
-  // Period of the inbound force-drain pass (see loop()).
-  // Must be < (server ClientAliveInterval × (ClientAliveCountMax - 1)) so
-  // that at least one drain pass — and therefore at least one auto-reply to
-  // a server keepalive request — fits inside the disconnect window. With
-  // OpenSSH defaults (15s × 2 = 30s window), 3000ms gives a safe margin
-  // (~10 drain passes per window) even under heavy lock contention.
-  static constexpr unsigned long kForceDrainIntervalMs = 3000;
-  static constexpr TickType_t kForceDrainLockTimeout = pdMS_TO_TICKS(3000);
 
   // Statistics
   SemaphoreHandle_t statsMutex_ = nullptr;

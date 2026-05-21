@@ -222,22 +222,6 @@ void SSHTunnel::loop() {
     // keep accepting until no more pending channels
   }
 
-  // --- Fix 2B: periodic force-drain of libssh2 inbound queue ---
-  // Under sustained pumpAll lock contention, the hot-path handleNewConnection()
-  // (50ms lock timeout) skips, libssh2_channel_forward_accept never runs, and
-  // SSH_MSG_GLOBAL_REQUEST keepalives from sshd accumulate without auto-reply.
-  // sshd then hits ClientAliveCountMax and RSTs the session.
-  // This block runs handleNewConnection() with a long lock timeout
-  // (kForceDrainLockTimeout, default 3s) every kForceDrainIntervalMs so the
-  // drain — and therefore the auto-replies — is guaranteed to happen well
-  // within the server-side disconnect window.
-  if (now - lastForceDrainMs_ >= kForceDrainIntervalMs) {
-    while (handleNewConnection(kForceDrainLockTimeout)) {
-      // keep draining until no more pending channels
-    }
-    lastForceDrainMs_ = now;
-  }
-
   // Watchdog: if forward_accept has been silently idle (EAGAIN-only) while
   // sshd has pending forward connections, libssh2_channel_forward_accept
   // never returns them. Cancel and recreate the listener to unblock without
@@ -343,11 +327,11 @@ bool SSHTunnel::hasAnyBackpressure() const {
 // Private
 // ---------------------------------------------------------------------------
 
-bool SSHTunnel::handleNewConnection(TickType_t lockTimeout) {
+bool SSHTunnel::handleNewConnection() {
   // Always try to accept from libssh2, even if slots are full.
   // This prevents the SSH server from timing out the forwarded channel.
   TunnelConfig mapping;
-  LIBSSH2_CHANNEL *ch = session_.acceptChannel(mapping, lockTimeout);
+  LIBSSH2_CHANNEL *ch = session_.acceptChannel(mapping);
   if (!ch) {
     if (session_.hasFatalAcceptFailure()) {
       LOGF_W("SSH", "Fatal forward_accept error err=%d count=%d, reconnecting",

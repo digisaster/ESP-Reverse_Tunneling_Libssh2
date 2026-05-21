@@ -314,8 +314,7 @@ bool SSHSession::hasFatalAcceptFailure() const {
       LIBSSH2_ERROR_SOCKET_DISCONNECT);
 }
 
-LIBSSH2_CHANNEL *SSHSession::acceptChannel(TunnelConfig &outMapping,
-                                           TickType_t lockTimeout) {
+LIBSSH2_CHANNEL *SSHSession::acceptChannel(TunnelConfig &outMapping) {
   if (!session_ || listeners_.empty()) {
     return nullptr;
   }
@@ -332,7 +331,7 @@ LIBSSH2_CHANNEL *SSHSession::acceptChannel(TunnelConfig &outMapping,
     unsigned long pollNow = millis();
     acceptDiag_.recordPoll(pollNow);
 #endif
-    if (!lock(lockTimeout)) {
+    if (!lock(pdMS_TO_TICKS(50))) {
 #ifdef TUNNEL_DIAG_LOG_ONLY
       acceptDiag_.recordLockUnavailable(millis());
       LOGF_W("SSH",
@@ -506,7 +505,9 @@ bool SSHSession::handshake() {
   // Add LIBSSH2_TRACE_TRANS if you also need per-packet visibility (very
   // chatty — thousands of lines/sec on a busy session).
   libssh2_trace_sethandler(session_, this, libssh2TraceToLogger);
-  libssh2_trace(session_, LIBSSH2_TRACE_CONN);
+  // TEMPORAIRE: CONN | TRANS pour diagnostiquer la flood CHANNEL_UNKNOWN à T+90s.
+  // À remettre à juste LIBSSH2_TRACE_CONN une fois le diag terminé.
+  libssh2_trace(session_, LIBSSH2_TRACE_CONN | LIBSSH2_TRACE_TRANS);
 #endif
 
   // Session stays BLOCKING during setup (handshake, auth, listeners).

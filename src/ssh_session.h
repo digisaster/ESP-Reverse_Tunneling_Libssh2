@@ -55,16 +55,7 @@ public:
   // Accept a pending channel from any active listener.
   // Returns the LIBSSH2_CHANNEL* and fills outMapping with the corresponding
   // config. Returns nullptr if no channel is pending.
-  //
-  // lockTimeout controls how long we wait to acquire the session mutex per
-  // listener. The default 50ms keeps the hot polling path lightweight; a
-  // longer value is used by the periodic force-drain path in SSHTunnel::loop
-  // to guarantee that libssh2_channel_forward_accept (which internally
-  // drains the input queue and triggers auto-replies to server-side
-  // SSH_MSG_GLOBAL_REQUEST keepalives) runs at least every few seconds even
-  // when pumpAll churns under heavy forwarded traffic.
-  LIBSSH2_CHANNEL *acceptChannel(TunnelConfig &outMapping,
-                                 TickType_t lockTimeout = pdMS_TO_TICKS(50));
+  LIBSSH2_CHANNEL *acceptChannel(TunnelConfig &outMapping);
   bool hasFatalAcceptFailure() const;
   int getLastAcceptError() const { return lastAcceptError_; }
   int getConsecutiveFatalAcceptErrors() const {
