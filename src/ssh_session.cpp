@@ -153,6 +153,8 @@ bool SSHSession::connect(SSHConfiguration *config) {
   sessionConnectedMs_ = millis();
   lastKeepaliveOkMs_ = sessionConnectedMs_;
   lastKeepaliveAttemptMs_ = 0;
+  lastChannelUnknownLogMs_ = 0;
+  channelUnknownTotal_ = 0;
 
   LOG_I("SSH", "SSH session fully connected (non-blocking mode active)");
   return true;
@@ -344,6 +346,23 @@ LIBSSH2_CHANNEL *SSHSession::acceptChannel(TunnelConfig &outMapping) {
     }
     LIBSSH2_CHANNEL *ch = libssh2_channel_forward_accept(entry.listener);
     int acceptErr = ch ? 0 : libssh2_session_last_errno(session_);
+    // Capture libssh2 error message UNDER the lock so we can decode what
+    // libssh2 actually thinks is going wrong when CHANNEL_UNKNOWN floods
+    // (the 4468 err=-23/45s pattern observed in production logs).
+    char libssh2ErrMsg[160] = {0};
+    if (acceptErr == LIBSSH2_ERROR_CHANNEL_UNKNOWN) {
+      char *errmsg = nullptr;
+      int errmsgLen = 0;
+      libssh2_session_last_error(session_, &errmsg, &errmsgLen,
+                                 /*want_buf=*/0);
+      if (errmsg && errmsgLen > 0) {
+        size_t n = static_cast<size_t>(errmsgLen) < sizeof(libssh2ErrMsg) - 1
+                       ? static_cast<size_t>(errmsgLen)
+                       : sizeof(libssh2ErrMsg) - 1;
+        memcpy(libssh2ErrMsg, errmsg, n);
+        libssh2ErrMsg[n] = '\0';
+      }
+    }
     unlock();
     if (ch) {
       outMapping = entry.mapping;
@@ -369,6 +388,25 @@ LIBSSH2_CHANNEL *SSHSession::acceptChannel(TunnelConfig &outMapping) {
       return ch;
     }
     recordAcceptNoChannel(acceptErr);
+    // Throttled CHANNEL_UNKNOWN diagnostic. Flood logging would saturate
+    // serial; we print at most once per 1000ms with the cumulative count and
+    // libssh2's textual error so we can decode the actual cause.
+    if (acceptErr == LIBSSH2_ERROR_CHANNEL_UNKNOWN) {
+      ++channelUnknownTotal_;
+      unsigned long nowChu = millis();
+      if (nowChu - lastChannelUnknownLogMs_ >= 1000) {
+        lastChannelUnknownLogMs_ = nowChu;
+        unsigned long ageMs =
+            sessionConnectedMs_ ? (nowChu - sessionConnectedMs_) : 0;
+        LOGF_W("SSH",
+               "CHANNEL_UNKNOWN diag total=%lu since_conn=%lums "
+               "libssh2_msg=\"%s\" listener=%s:%d->%s:%d bound=%d",
+               channelUnknownTotal_, ageMs, libssh2ErrMsg,
+               entry.mapping.remoteBindHost.c_str(),
+               entry.mapping.remoteBindPort, entry.mapping.localHost.c_str(),
+               entry.mapping.localPort, entry.boundPort);
+      }
+    }
 #ifdef TUNNEL_DIAG_LOG_ONLY
     acceptDiag_.recordNoChannel(millis(), acceptErr,
                                 acceptErr == LIBSSH2_ERROR_EAGAIN);
@@ -1063,5 +1101,7 @@ void SSHSession::cleanupSession() {
   sessionConnectedMs_ = 0;
   lastKeepaliveOkMs_ = 0;
   lastKeepaliveAttemptMs_ = 0;
+  lastChannelUnknownLogMs_ = 0;
+  channelUnknownTotal_ = 0;
   resetAcceptState();
 }

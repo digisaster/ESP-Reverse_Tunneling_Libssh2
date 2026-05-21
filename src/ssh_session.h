@@ -133,6 +133,10 @@ private:
   unsigned long sessionConnectedMs_ = 0;
   unsigned long lastKeepaliveOkMs_ = 0;
   unsigned long lastKeepaliveAttemptMs_ = 0;
+  // Throttle for the verbose CHANNEL_UNKNOWN log (otherwise it would spam at
+  // ~100Hz once the flood starts and drown all other diagnostics).
+  unsigned long lastChannelUnknownLogMs_ = 0;
+  unsigned long channelUnknownTotal_ = 0;
   int lastAcceptError_ = 0;
   int consecutiveFatalAcceptErrors_ = 0;
   unsigned long lastAcceptMs_ = 0;
