@@ -1,4 +1,5 @@
 #include "../../../src/circuit_breaker.h"
+#include <climits>
 #include <unity.h>
 
 void setUp(void) {}
@@ -89,7 +90,9 @@ void test_table_saturation_silent(void) {
 
 void test_millis_wrap(void) {
     CircuitBreaker cb;
-    unsigned long nearMax = 0xFFFFFFFEUL;
+    // Use the platform's actual unsigned-long max so the wrap simulation works
+    // on both 32-bit (ESP32 millis()) and 64-bit (native test) targets.
+    unsigned long nearMax = ULONG_MAX - 1UL;
     for (int i = 0; i < 3; ++i) cb.recordFailure(22080, nearMax);
     // backoffUntilMs has wrapped past 0
     TEST_ASSERT_TRUE(cb.isBackedOff(22080, nearMax));
