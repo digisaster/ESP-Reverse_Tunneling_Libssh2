@@ -93,6 +93,16 @@ pio run                    # Compilation
 pio run --target upload    # Upload to ESP32
 ```
 
+For a WEMOS LOLIN S2 Mini, select the dedicated PlatformIO environment:
+
+```bash
+pio run -e lolin_s2_mini
+pio run -e lolin_s2_mini --target upload
+```
+
+The WEMOS LOLIN S2 Mini with PSRAM has been successfully tested end to end with
+a reverse SSH connection and an active forwarded SSH channel.
+
 ## 📁 Examples Structure
 
 This project provides two example formats:
