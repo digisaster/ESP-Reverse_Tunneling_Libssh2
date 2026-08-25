@@ -1,3 +1,13 @@
+#include "secrets.h"
+
+const char *configSSHHost = SSH_HOST;
+const int configSSHPort = SSH_PORT;
+const char *configSSHPassword = SSH_PASSWORD;
+
+#undef SSH_HOST
+#undef SSH_PORT
+#undef SSH_PASSWORD
+
 #include "ESP-Reverse_Tunneling_Libssh2.h"
 #include <Arduino.h>
 #include <WiFi.h>
@@ -6,12 +16,8 @@
 #include <freertos/task.h>
 
 #ifndef ENABLE_MULTI_TUNNEL_DEMO
-#define ENABLE_MULTI_TUNNEL_DEMO 1
+#define ENABLE_MULTI_TUNNEL_DEMO 0
 #endif
-
-// WiFi configuration
-const char *ssid = "YOUR_WIFI_SSID";
-const char *password = "YOUR_WIFI_PASSWORD";
 
 // SSH tunnel instance
 SSHTunnel tunnel;
@@ -83,7 +89,7 @@ void loop() {
 
 void connectWiFi() {
   LOG_I("WIFI", "Connecting to WiFi...");
-  WiFi.begin(ssid, password);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 30) {
@@ -107,10 +113,10 @@ void configureSSHTunnel() {
 
   // ===== METHOD 1: SSH configuration with password =====
   globalSSHConfig.setSSHServer(
-      "your-remote-server.com", // Replace with your server
-      22,                       // SSH port
-      "your_username",          // Username
-      "your_password"           // Password
+      configSSHHost,
+      configSSHPort,
+      SSH_USER,
+      configSSHPassword
   );
 
   // ===== METHOD 2: SSH configuration with key from LittleFS =====
@@ -156,10 +162,8 @@ void configureSSHTunnel() {
   if (ENABLE_MULTI_TUNNEL_DEMO) {
     configureMultiTunnelMappings();
   } else {
-    globalSSHConfig.setTunnelConfig("127.0.0.1",     // Bind address on remote
-                                    8080,            // Remote bind port
-                                    "192.168.1.100", // Local host
-                                    80);             // Local port
+    globalSSHConfig.setTunnelConfig("127.0.0.1", TUNNEL1_REMOTE_PORT,
+                                    TUNNEL1_LOCAL_HOST, TUNNEL1_LOCAL_PORT);
   }
 
   // Connection configuration

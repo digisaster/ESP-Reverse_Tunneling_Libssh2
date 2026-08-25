@@ -50,3 +50,4 @@ __pycache__/
 # Local-only design docs / specs / plans / test reports
 docs/superpowers/
 
+examples/src/secrets.h
