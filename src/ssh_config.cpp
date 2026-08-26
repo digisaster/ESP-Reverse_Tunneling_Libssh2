@@ -413,15 +413,20 @@ void SSHConfiguration::setConnectionConfig(int keepAliveInterval,
 void SSHConfiguration::setBufferConfig(int bufferSize, int maxChannels,
                                        int channelTimeout,
                                        size_t tunnelRingBufferSize) {
+  const unsigned long channelTimeoutMs =
+      channelTimeout > 0 ? static_cast<unsigned long>(channelTimeout) : 0;
   if (lockConfig()) {
     connectionConfig.bufferSize = bufferSize;
     connectionConfig.maxChannels = maxChannels;
+    connectionConfig.channelTimeoutMs = channelTimeoutMs;
     connectionConfig.tunnelRingBufferSize = tunnelRingBufferSize;
     unlockConfig();
 
     LOGF_I("CONFIG",
-           "Buffer config: size=%d, max_channels=%d, ring_buffer=%u bytes",
-           bufferSize, maxChannels, (unsigned)tunnelRingBufferSize);
+           "Buffer config: size=%d, max_channels=%d, channel_timeout=%lums, "
+           "ring_buffer=%u bytes",
+           bufferSize, maxChannels, channelTimeoutMs,
+           (unsigned)tunnelRingBufferSize);
   }
 }
 

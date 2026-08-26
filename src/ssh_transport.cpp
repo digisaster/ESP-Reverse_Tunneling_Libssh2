@@ -1,4 +1,5 @@
 #include "ssh_transport.h"
+#include "channel_timeout.h"
 #include "memory_fixes.h"
 #include <ctype.h>
 #include <errno.h>
@@ -278,8 +279,9 @@ TransportPump::~TransportPump() {
   SAFE_FREE(txBuf_);
 }
 
-bool TransportPump::init(size_t bufferSize) {
+bool TransportPump::init(size_t bufferSize, unsigned long channelTimeoutMs) {
   bufSize_ = bufferSize;
+  channelTimeoutMs_ = channelTimeoutMs;
   rxBuf_ = static_cast<uint8_t *>(safeMalloc(bufSize_, "tp_rxBuf"));
   txBuf_ = static_cast<uint8_t *>(safeMalloc(bufSize_, "tp_txBuf"));
   if (!rxBuf_ || !txBuf_) {
@@ -909,7 +911,8 @@ void TransportPump::checkCloses() {
 
     // Local closed first and outbound ring drained → begin graceful drain.
     // Covers both clean local EOF (recv==0) and local send/recv errors.
-    // Without this, the channel would stall until the 30s inactivity timeout.
+    // Without this, the channel would stall until the configured inactivity
+    // timeout.
     if (ch.localEof && !ch.remoteEof &&
         (!ch.toRemote || ch.toRemote->empty())) {
       LOGF_I("SSH", "Channel %d: local EOF, toRemote drained → closing", i);
@@ -950,8 +953,8 @@ void TransportPump::checkCloses() {
       }
     }
 
-    // Full inactivity timeout (30 seconds with no data movement)
-    if (ch.lastActivity > 0 && (now - ch.lastActivity) > 30000) {
+    // Full inactivity timeout. A value of 0 disables idle channel closure.
+    if (channel_timeout::expired(now, ch.lastActivity, channelTimeoutMs_)) {
       LOGF_W("SSH", "Channel %d: inactivity timeout (%lums)", i,
              now - ch.lastActivity);
       channels_->beginClose(i, ChannelCloseReason::Timeout);

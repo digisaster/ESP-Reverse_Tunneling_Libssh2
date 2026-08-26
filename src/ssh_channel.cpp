@@ -1,5 +1,6 @@
 #include "ssh_channel.h"
 #include "channel_slot_alloc.h"
+#include "channel_timeout.h"
 #include "memory_fixes.h"
 #include "network_optimizations.h"
 #include <arpa/inet.h>
@@ -18,13 +19,15 @@ ChannelManager::ChannelManager() {}
 
 ChannelManager::~ChannelManager() { destroy(); }
 
-bool ChannelManager::init(int maxChannels, size_t ringBufferSize) {
+bool ChannelManager::init(int maxChannels, size_t ringBufferSize,
+                          unsigned long channelTimeoutMs) {
   if (slots_) {
     destroy();
   }
 
   maxSlots_ = maxChannels;
   ringBufferSize_ = ringBufferSize;
+  channelTimeoutMs_ = channelTimeoutMs;
   activeCount_ = 0;
 
   slots_ = static_cast<ChannelSlot *>(
@@ -87,9 +90,11 @@ int ChannelManager::allocateSlot() {
     return idx;
   }
 
-  // Second pass: recycle stale slot (30s inactivity)
+  // Second pass: recycle a slot only after the configured inactivity timeout.
   for (int i = 0; i < maxSlots_; ++i) {
-    if (slots_[i].active && (now - slots_[i].lastActivity) > 30000) {
+    if (slots_[i].active && channel_timeout::expired(
+                                now, slots_[i].lastActivity,
+                                channelTimeoutMs_)) {
       LOGF_I("SSH", "Recycling stale channel %d", i);
       beginClose(i, ChannelCloseReason::Timeout);
       return -1; // Don't reuse immediately; let drain complete first
