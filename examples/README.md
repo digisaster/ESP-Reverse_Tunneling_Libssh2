@@ -1,70 +1,98 @@
-# Examples – ESP-Reverse_Tunneling_Libssh2
+# Example firmware
 
-This folder contains ready-to-build sketches that demonstrate how to use the
-library on a standard ESP32 board.
+`src/main.cpp` is the reference reverse-tunnel firmware. It connects to Wi-Fi,
+opens the SSH session, creates the remote listener, forwards channels, and
+prints periodic diagnostics.
 
-## Layout
+## Private configuration
 
-- `platformio.ini` – minimal PlatformIO project definition referencing the
-  library from the repository root.
-- `src/main.cpp` – fully working reverse-tunnel example (Wi-Fi setup, SSH
-  configuration, tunnel loop, periodic stats).
-- `sdkconfig.*` – generated PlatformIO SDK defaults (kept for convenience).
+Do not put credentials in `main.cpp` or `secrets.example.h`. Copy the template
+once and edit only the ignored local file:
 
-No `.ino` sketches or helper scripts are required; everything builds from
-`src/main.cpp`.
-
-## Build
-
-```bash
-cd examples
-pio run          # compile the example
-pio run -t upload  # flash your connected ESP32
-pio device monitor  # watch serial logs (115200 by default)
+```powershell
+if (!(Test-Path examples/src/secrets.h)) {
+    Copy-Item examples/src/secrets.example.h examples/src/secrets.h
+}
 ```
 
-## Customize
+The following settings belong in `examples/src/secrets.h`:
 
-Edit `src/main.cpp` and adjust:
+- `WIFI_SSID` and `WIFI_PASSWORD`
+- `SSH_HOST`, `SSH_PORT`, `SSH_USER`, and `SSH_PASSWORD`
+- `TUNNEL1_REMOTE_PORT`, `TUNNEL1_LOCAL_HOST`, and `TUNNEL1_LOCAL_PORT`
 
-- Wi-Fi credentials (`WIFI_SSID`, `WIFI_PASSWORD`)
-- SSH server settings (`globalSSHConfig.setSSHServer` /
-  `setSSHKeyAuthFromMemory`)
-- Tunnel parameters (`setTunnelConfig`)
-- Optional tuning (`setBufferConfig`, `setKeepAliveOptions`, `setLogLevel`, …)
+From the repository root, verify that Git ignores the file:
 
-### Multi-tunnel demo
+```powershell
+git check-ignore -v examples/src/secrets.h
+git status --short
+```
 
-`src/main.cpp` now ships with an optional multi-tunnel scenario guarded by the
-`ENABLE_MULTI_TUNNEL_DEMO` flag at the top of the file. When the flag is set to
-`1` (default), `configureMultiTunnelMappings()` clears the legacy single tunnel,
-enables up to three reverse listeners via `setMaxReverseListeners()`, and adds
-several sample mappings:
+## WEMOS LOLIN S2 Mini
+
+Use the root PlatformIO project for the tested S2 target:
+
+```powershell
+pio run -e lolin_s2_mini
+pio device list
+pio run -e lolin_s2_mini --target upload --upload-port COM9
+pio device monitor -e lolin_s2_mini --port COM9 --baud 115200
+```
+
+Replace `COM9` with the current device port and close the monitor with `Ctrl+C`
+before uploading.
+
+If manual download mode is required, hold `BOOT`, press and release `RESET`,
+then release `BOOT` and retry the upload. Press `RESET` once after flashing if
+the application does not start automatically.
+
+## Single and multiple tunnels
+
+The reference firmware defaults to the single mapping from `secrets.h`:
+
+```text
+127.0.0.1:TUNNEL1_REMOTE_PORT -> TUNNEL1_LOCAL_HOST:TUNNEL1_LOCAL_PORT
+```
+
+Because the listener binds to remote `127.0.0.1`, it is reachable only from
+the SSH bastion. This prevents accidental public exposure.
+
+`ENABLE_MULTI_TUNNEL_DEMO` defaults to `0`. Set it to `1` only to run the
+hard-coded sample mappings in `configureMultiTunnelMappings()`. Applications
+should normally build mappings from their own configuration before
+`connectSSH()`.
+
+## Channel inactivity
+
+The example configures:
 
 ```cpp
-globalSSHConfig.clearTunnelMappings();
-globalSSHConfig.setMaxReverseListeners(3);
-
-globalSSHConfig.addTunnelMapping("127.0.0.1", 22080, "192.168.1.100", 80);
-globalSSHConfig.addTunnelMapping("127.0.0.1", 22081, "192.168.1.150", 5020);
-globalSSHConfig.addTunnelMapping("127.0.0.1", 22082, "192.168.1.200", 22);
+globalSSHConfig.setBufferConfig(8192, 5, 1800000, 64 * 1024);
 ```
 
-If you prefer the original single-listener behaviour, set
-`#define ENABLE_MULTI_TUNNEL_DEMO 0` and the sketch will revert to
-`setTunnelConfig()`.
+The third argument is the forwarded-channel inactivity timeout in
+milliseconds. The example uses 30 minutes. Set it to `0` to disable idle
+channel closure. This setting is independent of the outer SSH keepalive.
 
-### Callback helpers
+The 30-minute setting has been validated with an uninterrupted 45-minute
+interactive SSH session on the LOLIN S2 Mini.
 
-To illustrate the `SSHTunnelEvents` interface, the example registers a
-handful of lightweight callbacks (`registerTunnelCallbacks()`), printing when
-the SSH session connects/disconnects, when channels open/close (with reasons),
-and on errors. Replace the logging lambdas with your own application logic
-if you need deeper integration.
+## Expected serial output
 
-## Troubleshooting
+Wait for both messages before testing the tunnel:
 
-- Make sure the root library dependencies are installed (`pio pkg install`,
-  automatically handled in CI).
-- If you change the target board, update `examples/platformio.ini`.
-- Use `globalSSHConfig.setDebugConfig(true, 115200);` to increase log verbosity.
+```text
+Reverse listener ready ...
+Tunnel State: Connected
+```
+
+An active forwarded connection changes `Active Channels` from `0` to `1`.
+After a hard reset, an old sshd session may retain the remote port briefly;
+automatic retries normally recover after sshd releases the stale listener.
+
+## Callbacks
+
+The example registers `SSHTunnelEvents` callbacks for session connect and
+disconnect, channel open and close, and tunnel errors. Replace their logging
+implementations with application-specific handling when integrating the
+library.

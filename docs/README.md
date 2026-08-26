@@ -201,10 +201,15 @@ globalSSHConfig.setConnectionConfig(
 globalSSHConfig.setBufferConfig(
     8192,       // Buffer size: 8KB
     5,          // Max channels: 5
-    300000,     // (unused in v2, must be >0)
-    64 * 1024   // Ring buffer size per channel (per direction, default 64KB total)
+    1800000,    // Channel inactivity timeout: 30 minutes (0 = disabled)
+    64 * 1024   // Ring buffer size per channel, per direction
 );
 ```
+
+The third `setBufferConfig` argument applies to each forwarded channel, not to
+the outer SSH session. Activity in either direction resets the timer. A value
+of `0` keeps idle forwarded channels open indefinitely. Use SSH keepalives
+separately to detect a dead outer session.
 
 ### Multi-tunnel / multiple listeners
 
@@ -218,6 +223,20 @@ globalSSHConfig.setMaxReverseListeners(3);
 globalSSHConfig.addTunnelMapping("127.0.0.1", 22080, "192.168.1.100", 80);
 globalSSHConfig.addTunnelMapping("127.0.0.1", 22081, "192.168.1.150", 502);
 globalSSHConfig.addTunnelMapping("127.0.0.1", 22082, "192.168.1.200", 22);
+```
+
+Listeners bound to `127.0.0.1` are reachable only from the remote SSH server.
+To use such a listener from another computer, first create a local forward
+through that server, for example:
+
+```bash
+ssh -L 23181:127.0.0.1:22082 bastion-user@bastion.example.com
+```
+
+Keep that session open and run this in a second terminal:
+
+```bash
+ssh -p 23181 local-device-user@127.0.0.1
 ```
 
 > **Note:** Listeners are created at `connectSSH()` time. Adding mappings
@@ -234,5 +253,5 @@ For questions or issues:
 
 ---
 
-**Documentation version:** 1.0  
-**Last update:** 2025-02-04
+**Documentation version:** 1.1
+**Last update:** 2026-08-26
