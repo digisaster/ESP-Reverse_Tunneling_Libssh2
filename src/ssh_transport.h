@@ -47,7 +47,8 @@ public:
   ~TransportPump();
 
   // Allocate working buffers. Call once.
-  bool init(size_t bufferSize = 4096);
+  bool init(size_t bufferSize = 4096,
+            unsigned long channelTimeoutMs = 30000);
 
   // Set references to session and channel manager.
   void attach(SSHSession *session, ChannelManager *channels);
@@ -127,6 +128,7 @@ private:
   uint8_t *rxBuf_ = nullptr; // Shared read buffer
   uint8_t *txBuf_ = nullptr; // Shared write buffer
   size_t bufSize_ = 0;
+  unsigned long channelTimeoutMs_ = 30000;
 
   unsigned int roundRobinOffset_ = 0;
   size_t lastBytesMoved_ = 0;

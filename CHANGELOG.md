@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — 2026-08-26
+
+### Added
+
+- Local `examples/src/secrets.h` configuration with a tracked
+  `secrets.example.h` template. The real secrets file is ignored by Git.
+- Dedicated native regression coverage for configured channel inactivity,
+  disabled timeouts, and `millis()` wraparound.
+
+### Fixed
+
+- The root PlatformIO project no longer compiles `examples/src/main.cpp`
+  twice. `pio run -e lolin_s2_mini` now builds and links directly.
+- `setBufferConfig(..., channelTimeout, ...)` now stores and applies the
+  configured timeout in both transport and channel-slot recycling. Previously,
+  both paths hard-coded 30 seconds and ignored the public API argument.
+
+### Validated
+
+- WEMOS LOLIN S2 Mini release build: 62,420 bytes RAM (19.0%) and 1,065,046
+  bytes flash (81.3%).
+- Interactive SSH forwarding remained connected for 45 minutes without the
+  former 30-second idle disconnect.
+
+### Documentation
+
+- Added safe configuration, build, flash, serial-monitor, reverse-listener,
+  stale-listener, and channel-timeout instructions.
+
 ## [2.2.0] — 2026-04-30 — Stabilization
 
 ### Fixes
@@ -70,10 +99,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tcpip-forward` to bind cleanly. Without this, Bug #2 can still
   manifest after a hard network drop even with this release's
   firmware fixes.
-# Changelog
-
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-

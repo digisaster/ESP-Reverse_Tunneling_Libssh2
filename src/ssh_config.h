@@ -59,6 +59,7 @@ struct ConnectionConfig {
   int connectionTimeoutSec;
   int bufferSize;
   int maxChannels;
+  unsigned long channelTimeoutMs;
   bool libssh2KeepAliveEnabled;
   int libssh2KeepAliveIntervalSec;
   size_t tunnelRingBufferSize;
@@ -68,7 +69,7 @@ struct ConnectionConfig {
   ConnectionConfig()
       : keepAliveIntervalSec(10), reconnectDelayMs(5000),
         maxReconnectAttempts(5), connectionTimeoutSec(30), bufferSize(8192),
-        maxChannels(10), libssh2KeepAliveEnabled(true),
+        maxChannels(10), channelTimeoutMs(30000), libssh2KeepAliveEnabled(true),
         libssh2KeepAliveIntervalSec(30), tunnelRingBufferSize(64 * 1024),
         maxReverseListeners(1) {}
 };

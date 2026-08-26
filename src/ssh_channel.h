@@ -103,7 +103,8 @@ public:
   ~ChannelManager();
 
   // Allocate slot array. Call once after configuration is known.
-  bool init(int maxChannels, size_t ringBufferSize);
+  bool init(int maxChannels, size_t ringBufferSize,
+            unsigned long channelTimeoutMs = 30000);
 
   // Release all slots and free memory.
   void destroy();
@@ -169,6 +170,7 @@ private:
   int maxSlots_ = 0;
   int activeCount_ = 0;
   size_t ringBufferSize_ = 32 * 1024; // Per ring buffer (default 32KB)
+  unsigned long channelTimeoutMs_ = 30000;
 
   CircuitBreaker breaker_;
 };

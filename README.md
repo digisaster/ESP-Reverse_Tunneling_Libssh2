@@ -1,163 +1,182 @@
 # ESP-Reverse_Tunneling_Libssh2
 
-Library for ESP32 Arduino enabling creation of reverse SSH tunnels using libssh2.
+Arduino library for creating reverse SSH tunnels from an ESP32 with libssh2.
 
-### 1. Adding the Library
+The current reference target is a WEMOS LOLIN S2 Mini. It has been tested with
+Wi-Fi, password authentication, a reverse SSH listener, an interactive SSH
+channel, automatic reconnection, and a 45-minute uninterrupted idle session.
 
-**Option A: PlatformIO**
-```bash
-# Add to your platformio.ini
-lib_deps = 
-    https://github.com/playmiel/ESP-Reverse_Tunneling_Libssh2.git
-    https://github.com/playmiel/libssh2_esp  # libssh2 backend for ESP32
+## Installation
+
+Add the library to a PlatformIO project:
+
+```ini
+lib_deps =
+  https://github.com/digisaster/ESP-Reverse_Tunneling_Libssh2.git
 ```
 
-**Option B: Arduino IDE**
-1. Download the project
-2. Copy files to your libraries folder
+The library manifest installs the required `libssh2_esp` dependency.
 
-### 2. Usage in Your Code
+## Secure example configuration
+
+The repository example reads private settings from
+`examples/src/secrets.h`. This file is ignored by Git and must never be
+committed. `examples/src/secrets.example.h` contains safe placeholder values.
+
+Create the local file once in PowerShell:
+
+```powershell
+if (!(Test-Path examples/src/secrets.h)) {
+    Copy-Item examples/src/secrets.example.h examples/src/secrets.h
+}
+```
+
+Edit only `examples/src/secrets.h` and set:
+
+```cpp
+#define WIFI_SSID       "your-wifi"
+#define WIFI_PASSWORD   "your-wifi-password"
+
+#define SSH_HOST        "your-bastion.example.com"
+#define SSH_PORT        22
+#define SSH_USER        "your-bastion-user"
+#define SSH_PASSWORD    "your-bastion-password"
+
+#define TUNNEL1_REMOTE_PORT 23180
+#define TUNNEL1_LOCAL_HOST  "192.168.1.1"
+#define TUNNEL1_LOCAL_PORT  22
+```
+
+Verify the file before every commit:
+
+```powershell
+git check-ignore -v examples/src/secrets.h
+git status --short
+```
+
+`examples/src/secrets.h` must not appear in `git status`.
+
+## Build, flash, and monitor
+
+Run these commands from the repository root:
+
+```powershell
+pio run -e lolin_s2_mini
+pio device list
+pio run -e lolin_s2_mini --target upload --upload-port COM9
+pio device monitor -e lolin_s2_mini --port COM9 --baud 115200
+```
+
+Replace `COM9` with the port reported by `pio device list`. Close the serial
+monitor with `Ctrl+C` before flashing, otherwise the port remains busy.
+
+If automatic bootloader entry fails on an ESP32-S2:
+
+1. Hold `BOOT` (or `0`).
+2. Press and release `RESET`.
+3. Release `BOOT`.
+4. Run the upload command again.
+5. Press `RESET` once after upload if the application does not start.
+
+Do not publish generated firmware images: credentials compiled from
+`secrets.h` are present in the binary.
+
+## Connecting through the reverse tunnel
+
+The example binds its remote listener to `127.0.0.1`. This is intentional: the
+forwarded port is reachable only from the bastion and is not exposed directly
+to the internet.
+
+From the bastion:
+
+```bash
+ssh -p 23180 local-device-user@127.0.0.1
+```
+
+From another computer, first forward a local port through the bastion:
+
+```bash
+ssh -p 22 -L 23181:127.0.0.1:23180 bastion-user@bastion.example.com
+```
+
+Keep that command running and connect in a second terminal:
+
+```bash
+ssh -p 23181 local-device-user@127.0.0.1
+```
+
+Wait for `Tunnel State: Connected` before opening the forwarded connection.
+After a hard ESP32 reset, sshd may temporarily retain the old listener. For a
+bastion, `ClientAliveInterval 15` and `ClientAliveCountMax 2` are recommended
+to reap stale sessions promptly.
+
+## Library usage
+
+Configure Wi-Fi before starting the tunnel, then configure the SSH server and
+one or more mappings:
 
 ```cpp
 #include "ESP-Reverse_Tunneling_Libssh2.h"
 
-void setup() {
-    Serial.begin(115200);
-    
-    // WiFi configuration
-    WiFi.begin("YOUR_SSID", "YOUR_PASSWORD");
-    
-    // SSH tunnel configuration with password
-    globalSSHConfig.setSSHServer("server.com", 22, "user", "password");
-    
-    // OR with SSH key from memory (recommended for LittleFS)
-    globalSSHConfig.setSSHKeyAuth("server.com", 22, "user", "/ssh_key");
-    
-    // Create and start tunnel
-    SSHTunnel tunnel;
-    tunnel.init();
-    tunnel.connectSSH();
-}
-```
-
-### 3. SSH Key Authentication
-
-This library supports three methods for SSH key authentication:
-
-1. **Memory-based authentication** (recommended for ESP32/LittleFS):
-   ```cpp
-   globalSSHConfig.setSSHKeyAuth("server.com", 22, "user", "/ssh_key");
-   ```
-
-2. **Direct memory loading**:
-   ```cpp
-   globalSSHConfig.setSSHKeyAuthFromMemory("server.com", 22, "user", privateKey, publicKey);
-   ```
-
-3. **Manual key loading**:
-   ```cpp
-   globalSSHConfig.loadSSHKeysFromLittleFS("/ssh_key");
-   ```
-
-📖 **Detailed guide**: [SSH Keys with Memory Authentication](docs/SSH_KEYS_MEMORY.md)
-
-### 4. Host Key Verification (Security)
-
-For production environments, enable host key verification to prevent Man-in-the-Middle attacks:
-
-```cpp
-// Configure SSH with host key verification
-globalSSHConfig.setSSHKeyAuthFromMemory("server.com", 22, "user", privateKey, publicKey);
-
-// Enable host key verification (recommended for production)
-globalSSHConfig.setHostKeyVerification(
-    "SHA256:abcd1234efgh5678ijkl9012mnop3456qrst7890uvwx1234yz56",  // Accept OpenSSH format or 64-char hex
-    "ssh-ed25519",
-    true
-);
-
-// Optional: receive a diagnostic callback if the fingerprint changes
-globalSSHConfig.setHostKeyMismatchCallback(
-    [](const String& expected, const String& actual, const String& keyType, void*) {
-        LOGF_W("HOSTKEY", "Mismatch for %s (expected %s, got %s)", keyType.c_str(), expected.c_str(), actual.c_str());
-    }
-);
-```
-
-📖 **Security guide**: [Host Key Verification Documentation](docs/HOST_KEY_VERIFICATION.md)
-
-### 5. Compilation
-
-```bash
-pio run                    # Compilation
-pio run --target upload    # Upload to ESP32
-```
-
-For a WEMOS LOLIN S2 Mini, select the dedicated PlatformIO environment:
-
-```bash
-pio run -e lolin_s2_mini
-pio run -e lolin_s2_mini --target upload
-```
-
-The WEMOS LOLIN S2 Mini with PSRAM has been successfully tested end to end with
-a reverse SSH connection and an active forwarded SSH channel.
-
-## 📁 Examples Structure
-
-This project provides two example formats:
-
-### PlatformIO Example (Recommended)
-- **File**: [`examples/src/main.cpp`](examples/src/main.cpp)
-- **Usage**: Compiled when running `pio run` in the examples/ directory
-- **Features**: Full PlatformIO integration with advanced logging
-
-
-## 📚 Technical Documentation
-
-For more technical details:
-
-- [`examples/`](examples/) - Usage examples
-- [`docs/SSH_KEYS_MEMORY.md`](docs/SSH_KEYS_MEMORY.md) - SSH Key authentication guide
-- [`docs/HOST_KEY_VERIFICATION.md`](docs/HOST_KEY_VERIFICATION.md) - Security and host verification
-
-## 🎯 Specifications
-
-- **Platform**: ESP32 only
-- **Framework**: Arduino
-- **Cryptographic Backend**: mbedTLS
-- **Protocol**: SSH2 with reverse tunneling
-- **Memory**: 
-- ~19% RAM (used 46252 bytes from 327680 bytes)
-- ~65% Flash (used 897321 bytes from 1310720 bytes)
-
-## 🤝 Contributing
-
-Contributions are welcome! See documentation guides for more details.
-
-## 📄 License
-
-See LICENSE file for details.
-### 6. Connection Tuning
-
-```cpp
-// Configure libssh2 keepalives alongside the existing periodic send
-globalSSHConfig.setKeepAliveOptions(true, 30); // want-reply=1, 30s
-
-// Adjust logging without toggling the debugEnabled flag
-globalSSHConfig.setLogLevel(LOG_INFO);
-
-// Advanced data-path tuning
-// 4th argument = ring buffer size per channel ( per direction, default 64KB total)
-globalSSHConfig.setBufferConfig(8192, 10, 300000, 64 * 1024);
-```
-
-Retrieve the effective reverse tunnel port when you bind to `remoteBindPort = 0`:
-
-```cpp
 SSHTunnel tunnel;
-tunnel.init();
-if (tunnel.connectSSH()) {
-    LOGF_I("SSH", "Remote listener bound on %d", tunnel.getBoundPort());
+
+void setup() {
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  globalSSHConfig.setSSHServer(SSH_HOST, SSH_PORT, SSH_USER, SSH_PASSWORD);
+  globalSSHConfig.setTunnelConfig("127.0.0.1", 23180,
+                                  "192.168.1.1", 22);
+  globalSSHConfig.setConnectionConfig(30, 5000, 5, 30);
+  globalSSHConfig.setBufferConfig(8192, 5, 1800000, 64 * 1024);
+
+  tunnel.init();
+  tunnel.connectSSH();
+}
+
+void loop() {
+  tunnel.loop();
 }
 ```
+
+The third `setBufferConfig` argument is the inactivity timeout per forwarded
+channel in milliseconds. `1800000` is 30 minutes; `0` disables idle channel
+closure. The outer SSH session keepalive is configured separately.
+
+## Authentication and server verification
+
+Password authentication is supported for initial testing. SSH key
+authentication and host-key verification are recommended for production:
+
+- [SSH key authentication](docs/SSH_KEYS_MEMORY.md)
+- [Host-key verification](docs/HOST_KEY_VERIFICATION.md)
+
+The example currently logs a warning when host-key verification is disabled.
+Treat enabling verification as a required production-hardening step.
+
+## Multiple tunnels
+
+The example defaults to one mapping from `secrets.h`. Set
+`ENABLE_MULTI_TUNNEL_DEMO` to `1` only when intentionally testing the sample
+multi-listener configuration. Applications can use `clearTunnelMappings()`,
+`setMaxReverseListeners()`, and `addTunnelMapping()` to configure several
+listeners before `connectSSH()`.
+
+## Tested resource usage
+
+Latest `lolin_s2_mini` release build:
+
+- RAM: 62,420 / 327,680 bytes (19.0%)
+- Flash: 1,065,046 / 1,310,720 bytes (81.3%)
+
+## Documentation
+
+- [Example guide](examples/README.md)
+- [Technical documentation](docs/README.md)
+- [SSH key authentication](docs/SSH_KEYS_MEMORY.md)
+- [Host-key verification](docs/HOST_KEY_VERIFICATION.md)
+- [Integration tests](test/integration/README.md)
+- [Changelog](CHANGELOG.md)
+
+## License
+
+See [LICENSE](LICENSE).

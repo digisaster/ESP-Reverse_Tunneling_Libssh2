@@ -79,14 +79,15 @@ bool SSHTunnel::init() {
     perDirectionSize = 8192; // Minimum 8KB per direction
   }
 
-  if (!channels_.init(connConfig.maxChannels, perDirectionSize)) {
+  if (!channels_.init(connConfig.maxChannels, perDirectionSize,
+                      connConfig.channelTimeoutMs)) {
     LOG_E("SSH", "Failed to initialize channel manager");
     return false;
   }
 
   // Initialize transport pump
   size_t bufSize = connConfig.bufferSize > 0 ? connConfig.bufferSize : 4096;
-  if (!transport_.init(bufSize)) {
+  if (!transport_.init(bufSize, connConfig.channelTimeoutMs)) {
     LOG_E("SSH", "Failed to initialize transport pump");
     return false;
   }
