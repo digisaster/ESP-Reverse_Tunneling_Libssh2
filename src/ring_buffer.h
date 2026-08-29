@@ -9,6 +9,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifndef SSH_TUNNEL_PREPEND_CAPACITY
+#define SSH_TUNNEL_PREPEND_CAPACITY 8192
+#endif
+
 // Specialized ring buffer for raw byte data (wraps FreeRTOS ringbuffer).
 // Supports writeToFront() to put data back at the HEAD of the buffer,
 // preserving FIFO order when a write/send is partial or returns EAGAIN.
@@ -33,7 +37,9 @@ private:
   // Capacity must be >= TransportPump::bufSize_ (default 8192 from
   // ConnectionConfig). The storage is PSRAM-allocated below; PrependBuffer
   // is bound to it via reset() in the constructor.
-  static constexpr size_t PREPEND_CAP = 8192;
+  static constexpr size_t PREPEND_CAP = SSH_TUNNEL_PREPEND_CAPACITY;
+  static_assert(PREPEND_CAP > 0,
+                "SSH_TUNNEL_PREPEND_CAPACITY must be greater than zero");
   uint8_t *prependStorage_ = nullptr;
   PrependBuffer prepend_;
 
@@ -80,7 +86,7 @@ public:
       prependStorage_ = nullptr;
     } else {
       prepend_.reset(prependStorage_, PREPEND_CAP);
-      LOGF_I("RING", "Created %s: capacity=%zu bytes (PSRAM)", tag, capacity);
+      LOGF_I("RING", "Created %s: capacity=%zu bytes", tag, capacity);
     }
   }
 

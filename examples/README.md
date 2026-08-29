@@ -46,6 +46,35 @@ If manual download mode is required, hold `BOOT`, press and release `RESET`,
 then release `BOOT` and retry the upload. Press `RESET` once after flashing if
 the application does not start automatically.
 
+## ESP32-C3 low-memory profile
+
+The hardware-validated `esp32_c3_lowmem` environment uses the generic
+`esp32-c3-devkitm-1` board definition for a 4 MB ESP32-C3 board without PSRAM.
+Native USB CDC is enabled so serial output is visible on boards that connect
+through the chip's USB-Serial/JTAG port. The C3 test listener uses
+`TUNNEL1_REMOTE_PORT + 1` so it can run without colliding with a stale S2
+listener:
+
+```powershell
+pio run -e esp32_c3_lowmem
+pio device list
+pio run -e esp32_c3_lowmem --target upload --upload-port COM9
+pio device monitor -e esp32_c3_lowmem --port COM9 --baud 115200
+```
+
+The profile is deliberately limited to one active channel. Its buffer budget
+is approximately 32 KB before libssh2, Wi-Fi, and allocator overhead:
+
+- 2 x 4 KB transport buffers
+- 2 x 8 KB directional ring buffers
+- 2 x 4 KB prepend buffers
+
+Do not enable `ENABLE_MULTI_TUNNEL_DEMO` for this profile. Hardware validation
+confirmed repeated channel close and reopen, 30-second keep-alives, zero
+dropped bytes, and heap recovery after channel closure. A continually falling
+`Min Free Heap` is expected; a continually falling current `Free Heap` across
+repeated cycles is not and may indicate a leak.
+
 ## Single and multiple tunnels
 
 The reference firmware defaults to the single mapping from `secrets.h`:
@@ -64,7 +93,7 @@ should normally build mappings from their own configuration before
 
 ## Channel inactivity
 
-The example configures:
+The normal S2 profile configures:
 
 ```cpp
 globalSSHConfig.setBufferConfig(8192, 5, 1800000, 64 * 1024);

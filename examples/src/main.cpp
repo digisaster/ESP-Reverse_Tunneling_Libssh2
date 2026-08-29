@@ -19,6 +19,33 @@ const char *configSSHPassword = SSH_PASSWORD;
 #define ENABLE_MULTI_TUNNEL_DEMO 0
 #endif
 
+#ifndef SSH_TUNNEL_LOW_MEMORY_PROFILE
+#define SSH_TUNNEL_LOW_MEMORY_PROFILE 0
+#endif
+
+#ifndef SSH_TUNNEL_REMOTE_PORT_OFFSET
+#define SSH_TUNNEL_REMOTE_PORT_OFFSET 0
+#endif
+
+#if SSH_TUNNEL_LOW_MEMORY_PROFILE && ENABLE_MULTI_TUNNEL_DEMO
+#error "The low-memory profile supports only one tunnel mapping"
+#endif
+
+static constexpr int TUNNEL_REMOTE_PORT =
+    TUNNEL1_REMOTE_PORT + SSH_TUNNEL_REMOTE_PORT_OFFSET;
+static_assert(TUNNEL_REMOTE_PORT > 0 && TUNNEL_REMOTE_PORT <= 65535,
+              "Configured tunnel remote port is outside the valid range");
+
+#if SSH_TUNNEL_LOW_MEMORY_PROFILE
+static constexpr int TUNNEL_TRANSPORT_BUFFER_SIZE = 4096;
+static constexpr int TUNNEL_MAX_CHANNELS = 1;
+static constexpr size_t TUNNEL_RING_BUFFER_SIZE = 8 * 1024;
+#else
+static constexpr int TUNNEL_TRANSPORT_BUFFER_SIZE = 8192;
+static constexpr int TUNNEL_MAX_CHANNELS = 5;
+static constexpr size_t TUNNEL_RING_BUFFER_SIZE = 64 * 1024;
+#endif
+
 // SSH tunnel instance
 SSHTunnel tunnel;
 
@@ -42,13 +69,17 @@ void onTunnelError(int code, const char *detail);
 
 void setup() {
   Serial.begin(115200);
-  while (!Serial) {
+  const unsigned long serialWaitStarted = millis();
+  while (!Serial && millis() - serialWaitStarted < 2000) {
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 
   LOG_I(
       "MAIN",
       "ESP32 SSH Reverse Tunnel - Enhanced version with dynamic configuration");
+#if SSH_TUNNEL_LOW_MEMORY_PROFILE
+  LOG_I("MAIN", "Low-memory tunnel profile enabled");
+#endif
 
   // SSH tunnel configuration
   configureSSHTunnel();
@@ -162,9 +193,13 @@ void configureSSHTunnel() {
   if (ENABLE_MULTI_TUNNEL_DEMO) {
     configureMultiTunnelMappings();
   } else {
-    globalSSHConfig.setTunnelConfig("127.0.0.1", TUNNEL1_REMOTE_PORT,
+    globalSSHConfig.setTunnelConfig("127.0.0.1", TUNNEL_REMOTE_PORT,
                                     TUNNEL1_LOCAL_HOST, TUNNEL1_LOCAL_PORT);
   }
+
+#if SSH_TUNNEL_LOW_MEMORY_PROFILE
+  globalSSHConfig.setMaxReverseListeners(1);
+#endif
 
   // Connection configuration
   globalSSHConfig.setConnectionConfig(30,   // Keep-alive interval (seconds)
@@ -174,9 +209,10 @@ void configureSSHTunnel() {
   );
 
   // Buffer configuration
-  globalSSHConfig.setBufferConfig(8192,   // Buffer size
-                                  5,      // Max number of channels
-                                  1800000 // Channel timeout (ms) - 30 minutes
+  globalSSHConfig.setBufferConfig(TUNNEL_TRANSPORT_BUFFER_SIZE,
+                                  TUNNEL_MAX_CHANNELS,
+                                  1800000, // Channel timeout: 30 minutes
+                                  TUNNEL_RING_BUFFER_SIZE
   );
 
   // Debug configuration
