@@ -35,7 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ESP32-C3 low-memory release build: 39,080 bytes RAM (11.9%) and 1,134,840
   bytes flash (86.6%).
 - ESP32-C3 hardware testing confirmed an active forwarded SSH channel,
-  repeated channel close and reopen, 30-second keep-alives, zero dropped
+  repeated channel close and reopen, 30-second keepalive messages, zero dropped
   bytes, and heap recovery after channel closure.
 
 ### Documentation

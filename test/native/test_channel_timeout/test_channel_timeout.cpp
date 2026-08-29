@@ -18,8 +18,8 @@ void test_zero_timeout_disables_idle_close(void) {
 }
 
 void test_elapsed_time_handles_millis_wraparound(void) {
-  const unsigned long lastActivity = 0xFFFFFFF0UL;
-  const unsigned long now = 0x00000020UL;
+  const uint32_t lastActivity = UINT32_C(0xFFFFFFF0);
+  const uint32_t now = UINT32_C(0x00000020);
   TEST_ASSERT_FALSE(channel_timeout::expired(now, lastActivity, 48UL));
   TEST_ASSERT_TRUE(channel_timeout::expired(now, lastActivity, 47UL));
 }

@@ -100,7 +100,7 @@ Replace `COM9` with the detected port. Validation on the tested C3 covered:
 1. Wi-Fi and reverse-listener establishment.
 2. An active interactive forwarded SSH channel.
 3. Repeated channel close and reopen.
-4. Thirty-second keep-alives and idle operation.
+4. Thirty-second keepalive messages and idle operation.
 5. Zero dropped bytes and heap recovery after closing the channel.
 
 The tested profile is suitable as the ESP32-C3 reference configuration.
