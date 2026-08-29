@@ -78,6 +78,35 @@ If automatic bootloader entry fails on an ESP32-S2:
 4. Run the upload command again.
 5. Press `RESET` once after upload if the application does not start.
 
+### ESP32-C3 low-memory target
+
+The hardware-validated `esp32_c3_lowmem` environment targets an ESP32-C3
+DevKitM-1 compatible board without PSRAM. It intentionally allows one listener
+and one active forwarded channel, uses a 4 KB transport buffer, 8 KB per tunnel
+direction, and a 4 KB prepend buffer. Native USB CDC is enabled for boards that
+expose the ESP32-C3 USB-Serial/JTAG interface directly. To avoid colliding with
+a stale S2 listener during side-by-side operation, this profile uses
+`TUNNEL1_REMOTE_PORT + 1` (23181 when the configured port is 23180).
+
+```powershell
+pio run -e esp32_c3_lowmem
+pio device list
+pio run -e esp32_c3_lowmem --target upload --upload-port COM9
+pio device monitor -e esp32_c3_lowmem --port COM9 --baud 115200
+```
+
+Replace `COM9` with the detected port. Validation on the tested C3 covered:
+
+1. Wi-Fi and reverse-listener establishment.
+2. An active interactive forwarded SSH channel.
+3. Repeated channel close and reopen.
+4. Thirty-second keep-alives and idle operation.
+5. Zero dropped bytes and heap recovery after closing the channel.
+
+The tested profile is suitable as the ESP32-C3 reference configuration.
+Boards with a different flash layout or USB implementation may still need a
+board-specific PlatformIO environment.
+
 Do not publish generated firmware images: credentials compiled from
 `secrets.h` are present in the binary.
 

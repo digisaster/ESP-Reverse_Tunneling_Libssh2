@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `secrets.example.h` template. The real secrets file is ignored by Git.
 - Dedicated native regression coverage for configured channel inactivity,
   disabled timeouts, and `millis()` wraparound.
+- Initial `esp32_c3_lowmem` build profile for a single reverse listener and
+  active channel on ESP32-C3 boards without PSRAM.
 
 ### Fixed
 
@@ -21,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `setBufferConfig(..., channelTimeout, ...)` now stores and applies the
   configured timeout in both transport and channel-slot recycling. Previously,
   both paths hard-coded 30 seconds and ignored the public API argument.
+- The ring-buffer prepend capacity can now be reduced at build time using
+  `SSH_TUNNEL_PREPEND_CAPACITY`; the default remains 8 KB for compatibility.
 
 ### Validated
 
@@ -28,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bytes flash (81.3%).
 - Interactive SSH forwarding remained connected for 45 minutes without the
   former 30-second idle disconnect.
+- ESP32-C3 low-memory release build: 39,080 bytes RAM (11.9%) and 1,134,840
+  bytes flash (86.6%).
+- ESP32-C3 hardware testing confirmed an active forwarded SSH channel,
+  repeated channel close and reopen, 30-second keep-alives, zero dropped
+  bytes, and heap recovery after channel closure.
 
 ### Documentation
 
