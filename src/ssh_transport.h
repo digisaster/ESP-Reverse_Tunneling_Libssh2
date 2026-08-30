@@ -47,8 +47,7 @@ public:
   ~TransportPump();
 
   // Allocate working buffers. Call once.
-  bool init(size_t bufferSize = 4096,
-            unsigned long channelTimeoutMs = 30000);
+  bool init(size_t bufferSize = 4096, unsigned long channelTimeoutMs = 30000);
 
   // Set references to session and channel manager.
   void attach(SSHSession *session, ChannelManager *channels);

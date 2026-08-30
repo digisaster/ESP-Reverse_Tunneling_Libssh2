@@ -92,9 +92,9 @@ int ChannelManager::allocateSlot() {
 
   // Second pass: recycle a slot only after the configured inactivity timeout.
   for (int i = 0; i < maxSlots_; ++i) {
-    if (slots_[i].active && channel_timeout::expired(
-                                now, slots_[i].lastActivity,
-                                channelTimeoutMs_)) {
+    if (slots_[i].active &&
+        channel_timeout::expired(now, slots_[i].lastActivity,
+                                 channelTimeoutMs_)) {
       LOGF_I("SSH", "Recycling stale channel %d", i);
       beginClose(i, ChannelCloseReason::Timeout);
       return -1; // Don't reuse immediately; let drain complete first
