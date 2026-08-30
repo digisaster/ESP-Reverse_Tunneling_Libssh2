@@ -70,7 +70,7 @@ is approximately 32 KB before libssh2, Wi-Fi, and allocator overhead:
 - 2 x 4 KB prepend buffers
 
 Do not enable `ENABLE_MULTI_TUNNEL_DEMO` for this profile. Hardware validation
-confirmed repeated channel close and reopen, 30-second keep-alives, zero
+confirmed repeated channel close and reopen, 30-second keepalive messages, zero
 dropped bytes, and heap recovery after channel closure. A continually falling
 `Min Free Heap` is expected; a continually falling current `Free Heap` across
 repeated cycles is not and may indicate a leak.

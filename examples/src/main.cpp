@@ -143,12 +143,8 @@ void configureSSHTunnel() {
   LOG_I("CONFIG", "Configuring SSH tunnel...");
 
   // ===== METHOD 1: SSH configuration with password =====
-  globalSSHConfig.setSSHServer(
-      configSSHHost,
-      configSSHPort,
-      SSH_USER,
-      configSSHPassword
-  );
+  globalSSHConfig.setSSHServer(configSSHHost, configSSHPort, SSH_USER,
+                               configSSHPassword);
 
   // ===== METHOD 2: SSH configuration with key from LittleFS =====
   // This method automatically loads keys from LittleFS into memory
@@ -212,8 +208,7 @@ void configureSSHTunnel() {
   globalSSHConfig.setBufferConfig(TUNNEL_TRANSPORT_BUFFER_SIZE,
                                   TUNNEL_MAX_CHANNELS,
                                   1800000, // Channel timeout: 30 minutes
-                                  TUNNEL_RING_BUFFER_SIZE
-  );
+                                  TUNNEL_RING_BUFFER_SIZE);
 
   // Debug configuration
   globalSSHConfig.setDebugConfig(true,  // Debug enabled
