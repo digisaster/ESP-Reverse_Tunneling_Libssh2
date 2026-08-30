@@ -61,13 +61,45 @@ void test_oversized_write_rejected(void) {
     TEST_ASSERT_TRUE(pb.empty());
 }
 
-void test_write_when_non_empty_rejected(void) {
+void test_write_when_non_empty_prepends_in_fifo_order(void) {
     uint8_t storage[128];
     PrependBuffer pb(storage, sizeof(storage));
     uint8_t a[] = {1, 2, 3};
     uint8_t b[] = {9, 9};
     pb.writeToFront(a, 3);
-    TEST_ASSERT_EQUAL_size_t(0, pb.writeToFront(b, 2));
+    TEST_ASSERT_EQUAL_size_t(2, pb.writeToFront(b, 2));
+    TEST_ASSERT_EQUAL_size_t(5, pb.pending());
+
+    uint8_t out[5] = {};
+    uint8_t expected[] = {9, 9, 1, 2, 3};
+    TEST_ASSERT_EQUAL_size_t(5, pb.read(out, sizeof(out)));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, out, sizeof(expected));
+}
+
+void test_prepend_after_partial_read_preserves_remaining_bytes(void) {
+    uint8_t storage[8];
+    PrependBuffer pb(storage, sizeof(storage));
+    uint8_t original[] = {1, 2, 3, 4, 5};
+    pb.writeToFront(original, sizeof(original));
+
+    uint8_t consumed[2] = {};
+    TEST_ASSERT_EQUAL_size_t(2, pb.read(consumed, sizeof(consumed)));
+    uint8_t retry[] = {8, 9};
+    TEST_ASSERT_EQUAL_size_t(2, pb.writeToFront(retry, sizeof(retry)));
+
+    uint8_t out[5] = {};
+    uint8_t expected[] = {8, 9, 3, 4, 5};
+    TEST_ASSERT_EQUAL_size_t(5, pb.read(out, sizeof(out)));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, out, sizeof(expected));
+}
+
+void test_prepend_rejects_when_combined_data_exceeds_capacity(void) {
+    uint8_t storage[4];
+    PrependBuffer pb(storage, sizeof(storage));
+    uint8_t original[] = {1, 2, 3};
+    uint8_t retry[] = {8, 9};
+    pb.writeToFront(original, sizeof(original));
+    TEST_ASSERT_EQUAL_size_t(0, pb.writeToFront(retry, sizeof(retry)));
     TEST_ASSERT_EQUAL_size_t(3, pb.pending());
 }
 
@@ -133,7 +165,9 @@ int main(int, char **) {
     RUN_TEST(test_write_and_read_full);
     RUN_TEST(test_partial_read);
     RUN_TEST(test_oversized_write_rejected);
-    RUN_TEST(test_write_when_non_empty_rejected);
+    RUN_TEST(test_write_when_non_empty_prepends_in_fifo_order);
+    RUN_TEST(test_prepend_after_partial_read_preserves_remaining_bytes);
+    RUN_TEST(test_prepend_rejects_when_combined_data_exceeds_capacity);
     RUN_TEST(test_write_after_full_drain_succeeds);
     RUN_TEST(test_null_or_zero_rejected);
     RUN_TEST(test_clear);

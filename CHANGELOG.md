@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both paths hard-coded 30 seconds and ignored the public API argument.
 - The ring-buffer prepend capacity can now be reduced at build time using
   `SSH_TUNNEL_PREPEND_CAPACITY`; the default remains 8 KB for compatibility.
+- Tunnel byte counters now remain cumulative when channel slots close or are
+  reused, and `Bytes Dropped` reports actual discarded buffered payload.
+- Repeated partial writes preserve FIFO order when prepend data is already
+  pending; the transport no longer performs a read-and-discard fallback on a
+  live SSH channel.
+- Heap warnings now account for the requested allocation and a small operating
+  reserve instead of treating every healthy sub-50-KB ESP32-C3 heap as low.
 
 ### Validated
 

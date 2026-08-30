@@ -74,6 +74,15 @@ bool SSHTunnel::init() {
 
   // Initialize channel manager
   const ConnectionConfig &connConfig = config_->getConnectionConfig();
+  size_t bufSize = connConfig.bufferSize > 0 ? connConfig.bufferSize : 4096;
+  if (bufSize > SSH_TUNNEL_PREPEND_CAPACITY) {
+    LOGF_E("SSH",
+           "Transport buffer (%zu) exceeds prepend capacity (%u); increase "
+           "SSH_TUNNEL_PREPEND_CAPACITY",
+           bufSize, static_cast<unsigned>(SSH_TUNNEL_PREPEND_CAPACITY));
+    return false;
+  }
+
   size_t perDirectionSize = connConfig.tunnelRingBufferSize;
   if (perDirectionSize < 8192) {
     perDirectionSize = 8192; // Minimum 8KB per direction
@@ -86,7 +95,6 @@ bool SSHTunnel::init() {
   }
 
   // Initialize transport pump
-  size_t bufSize = connConfig.bufferSize > 0 ? connConfig.bufferSize : 4096;
   if (!transport_.init(bufSize, connConfig.channelTimeoutMs)) {
     LOG_E("SSH", "Failed to initialize transport pump");
     return false;
@@ -94,6 +102,9 @@ bool SSHTunnel::init() {
   transport_.attach(&session_, &channels_);
 
   state_ = TUNNEL_DISCONNECTED;
+  bytesReceived_ = 0;
+  bytesSent_ = 0;
+  bytesDropped_ = 0;
   LOG_I("SSH", "SSHTunnel initialized (v2 modular architecture)");
   return true;
 }
@@ -162,6 +173,7 @@ void SSHTunnel::disconnect() {
     deferredCloseQueue_[i].channel = nullptr;
   }
   deferredCloseCount_ = 0;
+  updateStats();
 
   if (state_ == TUNNEL_CONNECTED) {
     emitSessionDisconnected();
@@ -258,12 +270,7 @@ void SSHTunnel::loop() {
     drainDeferredCloseQueue();
   }
 
-  // Update aggregate stats
-  if (statsMutex_ && xSemaphoreTake(statsMutex_, pdMS_TO_TICKS(5)) == pdTRUE) {
-    bytesReceived_ = channels_.getTotalBytesReceived();
-    bytesSent_ = channels_.getTotalBytesSent();
-    xSemaphoreGive(statsMutex_);
-  }
+  updateStats();
 }
 
 TunnelState SSHTunnel::getState() { return state_; }
@@ -289,9 +296,7 @@ unsigned long SSHTunnel::getBytesReceived() { return bytesReceived_; }
 
 unsigned long SSHTunnel::getBytesSent() { return bytesSent_; }
 
-unsigned long SSHTunnel::getBytesDropped() {
-  return 0; // No deferred/drop mechanism in v2
-}
+unsigned long SSHTunnel::getBytesDropped() { return bytesDropped_; }
 
 int SSHTunnel::getActiveChannels() { return channels_.getActiveCount(); }
 
@@ -322,6 +327,17 @@ bool SSHTunnel::removeReverseTunnel(const String &remoteHost, int remotePort) {
 
 bool SSHTunnel::hasAnyBackpressure() const {
   return transport_.hasAnyBackpressure();
+}
+
+void SSHTunnel::updateStats() {
+  if (!statsMutex_ || xSemaphoreTake(statsMutex_, pdMS_TO_TICKS(5)) != pdTRUE) {
+    return;
+  }
+
+  bytesReceived_ = channels_.getTotalBytesReceived();
+  bytesSent_ = channels_.getTotalBytesSent();
+  bytesDropped_ = channels_.getTotalBytesDropped();
+  xSemaphoreGive(statsMutex_);
 }
 
 // ---------------------------------------------------------------------------
@@ -781,6 +797,7 @@ void SSHTunnel::enterErrorState(const char *reason) {
     deferredCloseQueue_[i].channel = nullptr;
   }
   deferredCloseCount_ = 0;
+  updateStats();
 
   state_ = TUNNEL_ERROR;
   socketHealthFailures_ = 0;

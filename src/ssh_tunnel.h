@@ -124,6 +124,9 @@ private:
   // Error handling: clean orphan channels + sockets, then set TUNNEL_ERROR
   void enterErrorState(const char *reason);
 
+  // Copy cumulative channel counters into the public statistics snapshot.
+  void updateStats();
+
   // Reconnection logic (with exponential backoff + auto-reset)
   void handleReconnection();
 
@@ -150,6 +153,7 @@ private:
   SemaphoreHandle_t statsMutex_ = nullptr;
   unsigned long bytesReceived_ = 0;
   unsigned long bytesSent_ = 0;
+  unsigned long bytesDropped_ = 0;
 
   // Configuration
   SSHConfiguration *config_ = nullptr;
