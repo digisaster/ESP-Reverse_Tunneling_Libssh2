@@ -197,8 +197,7 @@ bool ChannelManager::bindChannel(int slotIndex, LIBSSH2_CHANNEL *sshChannel,
         return false;
       }
     } else {
-      const size_t totalInternal =
-          heap_caps_get_free_size(MALLOC_CAP_8BIT);
+      const size_t totalInternal = heap_caps_get_free_size(MALLOC_CAP_8BIT);
       const size_t largestInternal =
           heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
       if (!channel_memory_guard::hasCapacity(totalInternal, largestInternal,
