@@ -29,6 +29,9 @@ bool ChannelManager::init(int maxChannels, size_t ringBufferSize,
   ringBufferSize_ = ringBufferSize;
   channelTimeoutMs_ = channelTimeoutMs;
   activeCount_ = 0;
+  completedBytesReceived_ = 0;
+  completedBytesSent_ = 0;
+  completedBytesDropped_ = 0;
 
   slots_ = static_cast<ChannelSlot *>(
       safeMalloc(sizeof(ChannelSlot) * maxSlots_, "ChannelSlots"));
@@ -317,12 +320,17 @@ bool ChannelManager::finalizeClose(int slotIndex) {
     slot.localSocket = -1;
   }
 
+  slot.totalBytesDropped +=
+      (slot.toLocal ? slot.toLocal->size() : 0) +
+      (slot.toRemote ? slot.toRemote->size() : 0);
+
   // Free ring buffers
   delete slot.toLocal;
   slot.toLocal = nullptr;
   delete slot.toRemote;
   slot.toRemote = nullptr;
 
+  archiveSlotStats(slot);
   slot.active = false;
   slot.state = ChannelSlot::State::Closed;
   // Stamp the finalize time so allocateSlot's cooldown can guard against
@@ -348,6 +356,10 @@ void ChannelManager::abandonSlot(int slotIndex, ChannelCloseReason reason) {
          "Channel %d: abandoning slot without libssh2 cleanup (reason=%d)",
          slotIndex, static_cast<int>(reason));
 
+  slot.totalBytesDropped +=
+      (slot.toLocal ? slot.toLocal->size() : 0) +
+      (slot.toRemote ? slot.toRemote->size() : 0);
+
   if (slot.localSocket >= 0) {
     close(slot.localSocket);
     slot.localSocket = -1;
@@ -359,6 +371,7 @@ void ChannelManager::abandonSlot(int slotIndex, ChannelCloseReason reason) {
   slot.toRemote = nullptr;
 
   slot.sshChannel = nullptr;
+  archiveSlotStats(slot);
   if (activeCount_ > 0) {
     activeCount_--;
   }
@@ -383,17 +396,31 @@ bool ChannelManager::shouldAcceptNew() const {
 }
 
 size_t ChannelManager::getTotalBytesReceived() const {
-  size_t total = 0;
+  size_t total = completedBytesReceived_;
   for (int i = 0; i < maxSlots_; ++i) {
-    total += slots_[i].totalBytesReceived;
+    if (slots_[i].active) {
+      total += slots_[i].totalBytesReceived;
+    }
   }
   return total;
 }
 
 size_t ChannelManager::getTotalBytesSent() const {
-  size_t total = 0;
+  size_t total = completedBytesSent_;
   for (int i = 0; i < maxSlots_; ++i) {
-    total += slots_[i].totalBytesSent;
+    if (slots_[i].active) {
+      total += slots_[i].totalBytesSent;
+    }
+  }
+  return total;
+}
+
+size_t ChannelManager::getTotalBytesDropped() const {
+  size_t total = completedBytesDropped_;
+  for (int i = 0; i < maxSlots_; ++i) {
+    if (slots_[i].active) {
+      total += slots_[i].totalBytesDropped;
+    }
   }
   return total;
 }
@@ -497,6 +524,12 @@ void ChannelManager::snapshotEndpoint(ChannelSlot &slot,
   slot.endpoint.remotePort = mapping.remoteBindPort;
 }
 
+void ChannelManager::archiveSlotStats(ChannelSlot &slot) {
+  completedBytesReceived_ += slot.totalBytesReceived;
+  completedBytesSent_ += slot.totalBytesSent;
+  completedBytesDropped_ += slot.totalBytesDropped;
+}
+
 void ChannelManager::resetSlot(int index) {
   if (index < 0 || index >= maxSlots_) {
     return;
@@ -517,6 +550,7 @@ void ChannelManager::resetSlot(int index) {
   slot.sshReadPaused = false;
   slot.totalBytesReceived = 0;
   slot.totalBytesSent = 0;
+  slot.totalBytesDropped = 0;
   slot.lastActivity = 0;
   slot.lastSuccessfulWrite = 0;
   slot.lastSuccessfulRead = 0;

@@ -58,6 +58,7 @@ struct ChannelSlot {
   // Statistics
   size_t totalBytesReceived = 0;
   size_t totalBytesSent = 0;
+  size_t totalBytesDropped = 0;
   unsigned long lastActivity = 0;
   unsigned long lastSuccessfulWrite = 0; // Last SSH write success
   unsigned long lastSuccessfulRead = 0;  // Last SSH read success
@@ -152,6 +153,7 @@ public:
   // Total stats across all channels
   size_t getTotalBytesReceived() const;
   size_t getTotalBytesSent() const;
+  size_t getTotalBytesDropped() const;
 
   // Circuit breaker: returns true if the mapping identified by remoteBindPort
   // is currently in back-off due to recent local-endpoint failures.
@@ -164,6 +166,7 @@ public:
 private:
   int connectToLocalEndpoint(const TunnelConfig &mapping);
   void snapshotEndpoint(ChannelSlot &slot, const TunnelConfig &mapping);
+  void archiveSlotStats(ChannelSlot &slot);
   void resetSlot(int index);
 
   ChannelSlot *slots_ = nullptr;
@@ -171,6 +174,9 @@ private:
   int activeCount_ = 0;
   size_t ringBufferSize_ = 32 * 1024; // Per ring buffer (default 32KB)
   unsigned long channelTimeoutMs_ = 30000;
+  size_t completedBytesReceived_ = 0;
+  size_t completedBytesSent_ = 0;
+  size_t completedBytesDropped_ = 0;
 
   CircuitBreaker breaker_;
 };

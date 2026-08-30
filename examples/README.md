@@ -75,6 +75,12 @@ dropped bytes, and heap recovery after channel closure. A continually falling
 `Min Free Heap` is expected; a continually falling current `Free Heap` across
 repeated cycles is not and may indicate a leak.
 
+The byte counters are cumulative for the lifetime of the firmware, including
+channels that have already closed. `Bytes Dropped` counts payload that could
+not be restored after a partial write and buffered payload abandoned during an
+error close. Normal C3 operation below 50 KB free heap no longer produces a
+warning; warnings are reserved for critically low usable heap.
+
 ## Single and multiple tunnels
 
 The reference firmware defaults to the single mapping from `secrets.h`:

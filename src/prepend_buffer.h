@@ -26,16 +26,22 @@ public:
     off_ = 0;
   }
 
-  // Returns number of bytes stored, or 0 on rejection.
-  // Rejected if: no storage bound, data null/zero-length, len > capacity,
-  // or buffer not yet drained.
+  // Returns number of bytes stored, or 0 on rejection. New data is inserted
+  // before any bytes that are still pending, preserving FIFO order after
+  // repeated partial writes.
   size_t writeToFront(const uint8_t *data, size_t len) {
-    if (!buf_ || !data || len == 0 || len > cap_)
+    if (!buf_ || !data || len == 0)
       return 0;
-    if (len_ > off_)
-      return 0; // not drained
+
+    const size_t pendingLen = pending();
+    if (len > cap_ - pendingLen)
+      return 0;
+
+    if (pendingLen > 0) {
+      std::memmove(buf_ + len, buf_ + off_, pendingLen);
+    }
     std::memcpy(buf_, data, len);
-    len_ = len;
+    len_ = len + pendingLen;
     off_ = 0;
     return len;
   }

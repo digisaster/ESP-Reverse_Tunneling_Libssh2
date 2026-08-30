@@ -32,19 +32,23 @@
     }                                                                          \
   } while (0)
 
-// Function to check heap health
-inline void checkHeapHealth() {
+// Check whether the requested allocation still leaves a small operating
+// reserve. Unlike the old fixed 50KB warning, this remains meaningful on
+// low-memory ESP32 variants that are healthy below that value.
+inline void checkHeapHealth(size_t requestedBytes = 0) {
 #if MEMFIX_LEVEL >= 2
   size_t freeHeap = ESP.getFreeHeap();
   size_t minFreeHeap = ESP.getMinFreeHeap();
-  if (freeHeap < 50000) {
-    LOGF_W("MEM", "Low heap: %u (min: %u)", (unsigned)freeHeap,
+  static constexpr size_t HEAP_RESERVE_BYTES = 8 * 1024;
+  if (freeHeap < requestedBytes + HEAP_RESERVE_BYTES) {
+    LOGF_W("MEM", "Low heap for %u-byte allocation: free %u (min: %u)",
+           (unsigned)requestedBytes, (unsigned)freeHeap,
            (unsigned)minFreeHeap);
   }
   size_t largestFreeBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  if (largestFreeBlock < freeHeap / 2) {
-    LOGF_W("MEM", "Fragmentation: largest %u vs free %u",
-           (unsigned)largestFreeBlock, (unsigned)freeHeap);
+  if (requestedBytes > 0 && largestFreeBlock < requestedBytes) {
+    LOGF_W("MEM", "Allocation at risk: need %u, largest block %u",
+           (unsigned)requestedBytes, (unsigned)largestFreeBlock);
   }
 #else
   // No-op in OFF/LIGHT modes
@@ -54,7 +58,7 @@ inline void checkHeapHealth() {
 // Safe allocation with verification
 inline void *safeMalloc(size_t size, const char *tag = "UNKNOWN") {
 #if MEMFIX_LEVEL >= 2
-  checkHeapHealth();
+  checkHeapHealth(size);
 #endif
   void *ptr = malloc(size);
   if (ptr == nullptr) {
@@ -74,7 +78,7 @@ inline void *safeMalloc(size_t size, const char *tag = "UNKNOWN") {
 // Safe reallocation with verification
 inline void *safeRealloc(void *ptr, size_t size, const char *tag = "UNKNOWN") {
 #if MEMFIX_LEVEL >= 2
-  checkHeapHealth();
+  checkHeapHealth(size);
 #endif
   void *newPtr = realloc(ptr, size);
   if (newPtr == nullptr && size > 0) {

@@ -19,6 +19,9 @@ const char *configSSHPassword = SSH_PASSWORD;
 #define ENABLE_MULTI_TUNNEL_DEMO 0
 #endif
 
+static constexpr size_t CRITICAL_FREE_HEAP_BYTES = 12 * 1024;
+static constexpr size_t CRITICAL_LARGEST_BLOCK_BYTES = 4 * 1024;
+
 #ifndef SSH_TUNNEL_LOW_MEMORY_PROFILE
 #define SSH_TUNNEL_LOW_MEMORY_PROFILE 0
 #endif
@@ -295,13 +298,17 @@ void reportStats() {
          minFreeHeap, largestFreeBlock);
   LOGF_I("SYSTEM", "Uptime: %lu seconds", millis() / 1000);
 
-  // Alert if critical memory
-  if (freeHeap < 50000) {
-    LOG_W("MEMORY", "LOW HEAP WARNING!");
+  // Alert only when the remaining internal heap is genuinely critical. A
+  // healthy ESP32-C3 can normally operate below the previous fixed 50KB
+  // threshold.
+  if (freeHeap < CRITICAL_FREE_HEAP_BYTES) {
+    LOGF_W("MEMORY", "Critical free heap: %u bytes", (unsigned)freeHeap);
   }
 
-  if (largestFreeBlock < freeHeap / 2) {
-    LOG_W("MEMORY", "HEAP FRAGMENTATION DETECTED!");
+  if (freeHeap >= CRITICAL_FREE_HEAP_BYTES &&
+      largestFreeBlock < CRITICAL_LARGEST_BLOCK_BYTES) {
+    LOGF_W("MEMORY", "Critical heap fragmentation: largest block %u bytes",
+           (unsigned)largestFreeBlock);
   }
 }
 

@@ -272,6 +272,36 @@ void logChannelsWithoutRequest(ChannelManager *channels) {
 } // namespace
 #endif
 
+namespace {
+size_t restoreUnsent(DataRingBuffer *buffer, const uint8_t *data, size_t len) {
+  if (!buffer || !data || len == 0) {
+    return 0;
+  }
+
+  size_t restored = buffer->writeToFront(data, len);
+  if (restored == len) {
+    return restored;
+  }
+
+  // This fallback is only expected for a custom transport buffer larger than
+  // the prepend capacity. The ring has just yielded these bytes, so normally
+  // it can accept the complete remainder again.
+  return buffer->write(data, len);
+}
+
+void accountRestoreDrop(ChannelSlot &channel, int slot, const char *direction,
+                        size_t expected, size_t restored) {
+  if (restored >= expected) {
+    return;
+  }
+
+  const size_t dropped = expected - restored;
+  channel.totalBytesDropped += dropped;
+  LOGF_E("SSH", "Channel %d: dropped %zu bytes while restoring %s data", slot,
+         dropped, direction);
+}
+} // namespace
+
 TransportPump::TransportPump() {}
 
 TransportPump::~TransportPump() {
@@ -503,6 +533,7 @@ void TransportPump::pumpSshTransport() {
 #endif
             size_t written = ch.toLocal->write(rxBuf_, rc);
             ch.totalBytesReceived += written;
+            ch.totalBytesDropped += static_cast<size_t>(rc) - written;
             lastBytesMoved_ += written;
             ch.lastSuccessfulRead = millis();
             ch.lastActivity = ch.lastSuccessfulRead;
@@ -551,6 +582,7 @@ void TransportPump::pumpSshTransport() {
 #endif
         size_t written = ch.toLocal->write(rxBuf_, rc);
         ch.totalBytesReceived += written;
+        ch.totalBytesDropped += static_cast<size_t>(rc) - written;
         lastBytesMoved_ += written;
         ch.lastSuccessfulRead = millis();
         ch.lastActivity = ch.lastSuccessfulRead;
@@ -591,11 +623,9 @@ void TransportPump::pumpSshTransport() {
     }
   }
 
-  // Fallback: if no channel was read (all paused, no remoteEof channels),
-  // pump the transport via a 1-byte read on a remoteEof channel (safe, no
-  // useful data left) or any active channel as last resort.
+  // Fallback: if no channel was read, pump via a remote-EOF channel where no
+  // payload remains. Never read-and-discard from a live channel here.
   if (!anyReadDone) {
-    bool fallbackDone = false;
     for (int i = 0; i < maxSlots; ++i) {
       ChannelSlot &ch = channels_->getSlot(i);
       if (ch.active && ch.sshChannel && ch.remoteEof) {
@@ -605,22 +635,7 @@ void TransportPump::pumpSshTransport() {
 #else
         libssh2_channel_read(ch.sshChannel, pumpBuf, sizeof(pumpBuf));
 #endif
-        fallbackDone = true;
         break;
-      }
-    }
-    if (!fallbackDone) {
-      for (int i = 0; i < maxSlots; ++i) {
-        ChannelSlot &ch = channels_->getSlot(i);
-        if (ch.active && ch.sshChannel && !ch.remoteEof) {
-          char pumpBuf[1];
-#ifdef TUNNEL_INSTRUMENT
-          instrRead(i, ch.sshChannel, pumpBuf, sizeof(pumpBuf));
-#else
-          libssh2_channel_read(ch.sshChannel, pumpBuf, sizeof(pumpBuf));
-#endif
-          break;
-        }
       }
     }
   }
@@ -676,22 +691,22 @@ void TransportPump::drainSshToLocal() {
         ch.firstLocalSendEagainMs = 0; // forward progress clears stall timer
         if (static_cast<size_t>(sent) < got) {
           // Partial send: put unsent data back at the front of the ring
-          if (ch.toLocal->writeToFront(txBuf_ + sent, got - sent) == 0) {
-            // Prepend buffer occupied — re-append to preserve data
-            ch.toLocal->write(txBuf_ + sent, got - sent);
-          }
+          const size_t remaining = got - static_cast<size_t>(sent);
+          const size_t restored =
+              restoreUnsent(ch.toLocal, txBuf_ + sent, remaining);
+          accountRestoreDrop(ch, i, "SSH-to-local", remaining, restored);
           break; // Socket can't take more right now
         }
       } else if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        ch.totalBytesDropped += got;
         ch.localEof = true;
         LOGF_W("SSH", "Channel %d: local send error %d (%s)", i, errno,
                strerror(errno));
         break;
       } else {
         // EAGAIN/EWOULDBLOCK: put ALL data back at the front
-        if (ch.toLocal->writeToFront(txBuf_, got) == 0) {
-          ch.toLocal->write(txBuf_, got);
-        }
+        const size_t restored = restoreUnsent(ch.toLocal, txBuf_, got);
+        accountRestoreDrop(ch, i, "SSH-to-local", got, restored);
         if (ch.firstLocalSendEagainMs == 0) {
           ch.firstLocalSendEagainMs = millis();
         }
@@ -775,24 +790,22 @@ void TransportPump::drainLocalToSsh() {
             ch.firstEagainMs = 0;
             ch.consecutiveErrors = 0;
             if (static_cast<size_t>(written) < got) {
-              if (ch.toRemote->writeToFront(txBuf_ + written, got - written) ==
-                  0) {
-                ch.toRemote->write(txBuf_ + written, got - written);
-              }
+              const size_t remaining = got - static_cast<size_t>(written);
+              const size_t restored =
+                  restoreUnsent(ch.toRemote, txBuf_ + written, remaining);
+              accountRestoreDrop(ch, i, "local-to-SSH", remaining, restored);
               break;
             }
           } else if (written == LIBSSH2_ERROR_EAGAIN) {
-            if (ch.toRemote->writeToFront(txBuf_, got) == 0) {
-              ch.toRemote->write(txBuf_, got);
-            }
+            const size_t restored = restoreUnsent(ch.toRemote, txBuf_, got);
+            accountRestoreDrop(ch, i, "local-to-SSH", got, restored);
             ch.eagainCount++;
             if (ch.firstEagainMs == 0)
               ch.firstEagainMs = millis();
             hitEagain = true;
           } else {
-            if (ch.toRemote->writeToFront(txBuf_, got) == 0) {
-              ch.toRemote->write(txBuf_, got);
-            }
+            const size_t restored = restoreUnsent(ch.toRemote, txBuf_, got);
+            accountRestoreDrop(ch, i, "local-to-SSH", got, restored);
             ch.consecutiveErrors++;
             LOGF_W("SSH", "Channel %d: SSH write error %ld (errors=%d)", i,
                    (long)written, ch.consecutiveErrors);
@@ -853,9 +866,10 @@ void TransportPump::drainLocalToSsh() {
 #ifdef TUNNEL_DIAG_LOG_ONLY
           logLocalResponseOnce(i, ch, rxBuf_, recvd);
 #endif
-          ch.toRemote->write(rxBuf_, recvd);
+          const size_t written = ch.toRemote->write(rxBuf_, recvd);
+          ch.totalBytesDropped += static_cast<size_t>(recvd) - written;
           ch.lastActivity = millis();
-          lastBytesMoved_ += recvd;
+          lastBytesMoved_ += written;
         } else if (recvd == 0) {
           ch.localEof = true;
           LOGF_I("SSH", "Channel %d: local EOF", i);
