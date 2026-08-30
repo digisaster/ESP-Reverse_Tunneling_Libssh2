@@ -1,4 +1,5 @@
 #include "ssh_channel.h"
+#include "channel_memory_guard.h"
 #include "channel_slot_alloc.h"
 #include "channel_timeout.h"
 #include "memory_fixes.h"
@@ -174,30 +175,40 @@ bool ChannelManager::bindChannel(int slotIndex, LIBSSH2_CHANNEL *sshChannel,
     tagR = extraTagsR[idx];
   }
 
-  // Heap guard: verify enough memory before allocating ring buffers.
-  // Check PSRAM if available, otherwise check internal heap.
+  // Heap guard: the two rings and two prepend buffers are separate
+  // allocations. Check their combined budget against total free memory, and
+  // only compare the largest individual allocation against the largest free
+  // block. Comparing the combined budget to one block falsely rejected a
+  // healthy low-memory C3 when its largest block was just below 32KB.
   {
-    const size_t required =
-        ringBufferSize_ * 2 +
-        static_cast<size_t>(SSH_TUNNEL_PREPEND_CAPACITY) * 2 +
-        8192; // Two rings, two prepend buffers, and allocator overhead.
-    size_t freePsram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
-    if (freePsram > 0) {
-      // Board has PSRAM — check PSRAM availability
-      if (freePsram < required) {
+    const auto required = channel_memory_guard::requirements(
+        ringBufferSize_, static_cast<size_t>(SSH_TUNNEL_PREPEND_CAPACITY));
+    const size_t totalPsram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    const size_t largestPsram =
+        heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    if (totalPsram > 0) {
+      if (!channel_memory_guard::hasCapacity(totalPsram, largestPsram,
+                                             required)) {
         LOGF_E("SSH",
-               "Not enough PSRAM for channel %d: need %zu, largest free %zu",
-               slotIndex, required, freePsram);
+               "Not enough PSRAM for channel %d: need total %zu and block "
+               "%zu, free total %zu and largest %zu",
+               slotIndex, required.totalBytes, required.largestBlockBytes,
+               totalPsram, largestPsram);
         close(localSocket);
         return false;
       }
     } else {
-      // No PSRAM — check internal heap (fallback path)
-      size_t freeInternal = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-      if (freeInternal < required) {
+      const size_t totalInternal =
+          heap_caps_get_free_size(MALLOC_CAP_8BIT);
+      const size_t largestInternal =
+          heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+      if (!channel_memory_guard::hasCapacity(totalInternal, largestInternal,
+                                             required)) {
         LOGF_E("SSH",
-               "Not enough heap for channel %d: need %zu, largest free %zu",
-               slotIndex, required, freeInternal);
+               "Not enough heap for channel %d: need total %zu and block "
+               "%zu, free total %zu and largest %zu",
+               slotIndex, required.totalBytes, required.largestBlockBytes,
+               totalInternal, largestInternal);
         close(localSocket);
         return false;
       }
