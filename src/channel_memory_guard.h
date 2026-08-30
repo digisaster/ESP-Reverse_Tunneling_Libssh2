@@ -28,6 +28,15 @@ inline bool hasCapacity(size_t totalFreeBytes, size_t largestFreeBlockBytes,
          largestFreeBlockBytes >= required.largestBlockBytes;
 }
 
+// Conservative PSRAM policy: require one contiguous region for the complete
+// storage budget. This guarantees that both ring-sized allocations can remain
+// in PSRAM instead of silently falling back to internal heap when PSRAM is
+// fragmented.
+inline bool hasContiguousCapacity(size_t largestFreeBlockBytes,
+                                  const Requirements &required) {
+  return largestFreeBlockBytes >= required.totalBytes;
+}
+
 } // namespace channel_memory_guard
 
 #endif // CHANNEL_MEMORY_GUARD_H

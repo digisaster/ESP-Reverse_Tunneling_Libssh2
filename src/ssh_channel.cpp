@@ -187,13 +187,12 @@ bool ChannelManager::bindChannel(int slotIndex, LIBSSH2_CHANNEL *sshChannel,
     const size_t largestPsram =
         heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
     if (totalPsram > 0) {
-      if (!channel_memory_guard::hasCapacity(totalPsram, largestPsram,
-                                             required)) {
+      if (!channel_memory_guard::hasContiguousCapacity(largestPsram,
+                                                       required)) {
         LOGF_E("SSH",
-               "Not enough PSRAM for channel %d: need total %zu and block "
-               "%zu, free total %zu and largest %zu",
-               slotIndex, required.totalBytes, required.largestBlockBytes,
-               totalPsram, largestPsram);
+               "Not enough contiguous PSRAM for channel %d: need block %zu, "
+               "free total %zu and largest %zu",
+               slotIndex, required.totalBytes, totalPsram, largestPsram);
         close(localSocket);
         return false;
       }
