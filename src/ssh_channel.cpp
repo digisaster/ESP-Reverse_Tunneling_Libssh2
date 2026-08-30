@@ -320,9 +320,8 @@ bool ChannelManager::finalizeClose(int slotIndex) {
     slot.localSocket = -1;
   }
 
-  slot.totalBytesDropped +=
-      (slot.toLocal ? slot.toLocal->size() : 0) +
-      (slot.toRemote ? slot.toRemote->size() : 0);
+  slot.totalBytesDropped += (slot.toLocal ? slot.toLocal->size() : 0) +
+                            (slot.toRemote ? slot.toRemote->size() : 0);
 
   // Free ring buffers
   delete slot.toLocal;
@@ -356,9 +355,8 @@ void ChannelManager::abandonSlot(int slotIndex, ChannelCloseReason reason) {
          "Channel %d: abandoning slot without libssh2 cleanup (reason=%d)",
          slotIndex, static_cast<int>(reason));
 
-  slot.totalBytesDropped +=
-      (slot.toLocal ? slot.toLocal->size() : 0) +
-      (slot.toRemote ? slot.toRemote->size() : 0);
+  slot.totalBytesDropped += (slot.toLocal ? slot.toLocal->size() : 0) +
+                            (slot.toRemote ? slot.toRemote->size() : 0);
 
   if (slot.localSocket >= 0) {
     close(slot.localSocket);

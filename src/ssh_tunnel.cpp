@@ -296,9 +296,7 @@ unsigned long SSHTunnel::getBytesReceived() { return bytesReceived_; }
 
 unsigned long SSHTunnel::getBytesSent() { return bytesSent_; }
 
-unsigned long SSHTunnel::getBytesDropped() {
-  return bytesDropped_;
-}
+unsigned long SSHTunnel::getBytesDropped() { return bytesDropped_; }
 
 int SSHTunnel::getActiveChannels() { return channels_.getActiveCount(); }
 
@@ -332,8 +330,7 @@ bool SSHTunnel::hasAnyBackpressure() const {
 }
 
 void SSHTunnel::updateStats() {
-  if (!statsMutex_ ||
-      xSemaphoreTake(statsMutex_, pdMS_TO_TICKS(5)) != pdTRUE) {
+  if (!statsMutex_ || xSemaphoreTake(statsMutex_, pdMS_TO_TICKS(5)) != pdTRUE) {
     return;
   }
 

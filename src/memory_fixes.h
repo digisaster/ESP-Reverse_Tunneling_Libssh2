@@ -42,8 +42,7 @@ inline void checkHeapHealth(size_t requestedBytes = 0) {
   static constexpr size_t HEAP_RESERVE_BYTES = 8 * 1024;
   if (freeHeap < requestedBytes + HEAP_RESERVE_BYTES) {
     LOGF_W("MEM", "Low heap for %u-byte allocation: free %u (min: %u)",
-           (unsigned)requestedBytes, (unsigned)freeHeap,
-           (unsigned)minFreeHeap);
+           (unsigned)requestedBytes, (unsigned)freeHeap, (unsigned)minFreeHeap);
   }
   size_t largestFreeBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   if (requestedBytes > 0 && largestFreeBlock < requestedBytes) {
