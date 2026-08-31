@@ -4,29 +4,18 @@
 opens the SSH session, creates the remote listener, forwards channels, and
 prints periodic diagnostics.
 
-## Private configuration
+## Device configuration
 
-Do not put credentials in `main.cpp` or `secrets.example.h`. Copy the template
-once and edit only the ignored local file:
-
-```powershell
-if (!(Test-Path examples/src/secrets.h)) {
-    Copy-Item examples/src/secrets.example.h examples/src/secrets.h
-}
-```
-
-The following settings belong in `examples/src/secrets.h`:
-
-- `WIFI_SSID` and `WIFI_PASSWORD`
-- `SSH_HOST`, `SSH_PORT`, `SSH_USER`, and `SSH_PASSWORD`
-- `TUNNEL1_REMOTE_PORT`, `TUNNEL1_LOCAL_HOST`, and `TUNNEL1_LOCAL_PORT`
-
-From the repository root, verify that Git ignores the file:
-
-```powershell
-git check-ignore -v examples/src/secrets.h
-git status --short
-```
+The reference firmware now ignores these compile-time example values and uses
+device provisioning. If `/esp32tun.cfg` does not exist, the
+firmware starts an open `esp32tun-XXXXXX` setup network. A captive portal
+normally opens the setup page automatically; `http://192.168.4.1` is printed as
+a fallback. The page scans for networks, tests the entered password, saves it
+to LittleFS, and restarts. After that restart the setup services are not
+created. This initial implementation stores the WiFi password as plain text on
+the device. After WiFi succeeds, a temporary second page on the trusted network
+configures password or private-key authentication and one reverse tunnel.
+Neither web server runs after the completed configuration restarts.
 
 ## WEMOS LOLIN S2 Mini
 
@@ -51,9 +40,8 @@ the application does not start automatically.
 The hardware-validated `esp32_c3_lowmem` environment uses the generic
 `esp32-c3-devkitm-1` board definition for a 4 MB ESP32-C3 board without PSRAM.
 Native USB CDC is enabled so serial output is visible on boards that connect
-through the chip's USB-Serial/JTAG port. The C3 test listener uses
-`TUNNEL1_REMOTE_PORT + 1` so it can run without colliding with a stale S2
-listener:
+through the chip's USB-Serial/JTAG port. Select the required remote listener
+port on the tunnel setup page:
 
 ```powershell
 pio run -e esp32_c3_lowmem
@@ -83,10 +71,10 @@ warning; warnings are reserved for critically low usable heap.
 
 ## Single and multiple tunnels
 
-The reference firmware defaults to the single mapping from `secrets.h`:
+The reference firmware uses the single mapping saved by the setup page:
 
 ```text
-127.0.0.1:TUNNEL1_REMOTE_PORT -> TUNNEL1_LOCAL_HOST:TUNNEL1_LOCAL_PORT
+REMOTE_BIND_HOST:REMOTE_BIND_PORT -> LOCAL_HOST:LOCAL_PORT
 ```
 
 Because the listener binds to remote `127.0.0.1`, it is reachable only from

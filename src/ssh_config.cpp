@@ -188,10 +188,7 @@ bool SSHConfiguration::validateSSHKeys() const {
     }
   }
 
-  if (sshConfig.publicKeyData.length() == 0) {
-    LOG_E("CONFIG", "Public key is empty");
-    valid = false;
-  } else {
+  if (sshConfig.publicKeyData.length() > 0) {
     if (sshConfig.publicKeyData.indexOf("ssh-") != 0 &&
         sshConfig.publicKeyData.indexOf("ecdsa-") != 0) {
       LOG_E("CONFIG",
@@ -579,9 +576,8 @@ bool SSHConfiguration::validateSSHConfig() const {
 
   if (sshConfig.useSSHKey) {
     // Check if we have keys in memory
-    if (sshConfig.privateKeyData.length() > 0 &&
-        sshConfig.publicKeyData.length() > 0) {
-      LOG_I("CONFIG", "SSH keys available in memory");
+    if (sshConfig.privateKeyData.length() > 0) {
+      LOG_I("CONFIG", "SSH private key available in memory");
       return true;
     }
 

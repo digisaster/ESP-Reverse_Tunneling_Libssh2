@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- First-boot WiFi provisioning for the reference firmware. A temporary setup
+  access point scans for networks, verifies the supplied credentials, writes
+  `/esp32tun.cfg`, and restarts without activating the setup server again.
+- Two-phase provisioning now configures password or private-key SSH
+  authentication and one reverse tunnel without editing source files.
 - Local `examples/src/secrets.h` configuration with a tracked
   `secrets.example.h` template. The real secrets file is ignored by Git.
 - Dedicated native regression coverage for configured channel inactivity,

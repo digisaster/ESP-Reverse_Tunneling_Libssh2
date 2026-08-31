@@ -795,8 +795,7 @@ bool SSHSession::authenticate(const SSHServerConfig &sshConfig) {
     config_->diagnoseSSHKeys();
   }
 
-  if (sshConfig.privateKeyData.length() > 0 &&
-      sshConfig.publicKeyData.length() > 0) {
+  if (sshConfig.privateKeyData.length() > 0) {
     // Validate keys
     if (config_ && !config_->validateSSHKeys()) {
       LOG_E("SSH", "SSH keys validation failed");
@@ -820,9 +819,10 @@ bool SSHSession::authenticate(const SSHServerConfig &sshConfig) {
       if (lock(pdMS_TO_TICKS(1000))) {
         auth_result = libssh2_userauth_publickey_frommemory(
             session_, sshConfig.username.c_str(), sshConfig.username.length(),
-            sshConfig.publicKeyData.c_str(), sshConfig.publicKeyData.length(),
-            sshConfig.privateKeyData.c_str(), sshConfig.privateKeyData.length(),
-            passphrases[attempt]);
+            sshConfig.publicKeyData.isEmpty() ? nullptr
+                                              : sshConfig.publicKeyData.c_str(),
+            sshConfig.publicKeyData.length(), sshConfig.privateKeyData.c_str(),
+            sshConfig.privateKeyData.length(), passphrases[attempt]);
         if (auth_result) {
           char *errmsg = nullptr;
           int errlen = 0;
