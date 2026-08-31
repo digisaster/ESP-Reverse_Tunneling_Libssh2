@@ -17,44 +17,26 @@ lib_deps =
 
 The library manifest installs the required `libssh2_esp` dependency.
 
-## Secure example configuration
+## First-boot WiFi setup
 
-The repository example reads private settings from
-`examples/src/secrets.h`. This file is ignored by Git and must never be
-committed. `examples/src/secrets.example.h` contains safe placeholder values.
+The reference firmware no longer compiles the WiFi name and password into the
+firmware. When `/esp32tun.cfg` is absent or invalid, the ESP32 starts a
+temporary, open `esp32tun-XXXXXX` access point. It normally launches the setup
+page automatically through a captive portal. The serial monitor also prints
+`http://192.168.4.1` as a fallback.
 
-Create the local file once in PowerShell:
+Select a network and choose **Test and continue**. After WiFi is verified, the
+open setup network closes. Reconnect to the selected network and follow the
+displayed link to the temporary tunnel setup page.
 
-```powershell
-if (!(Test-Path examples/src/secrets.h)) {
-    Copy-Item examples/src/secrets.example.h examples/src/secrets.h
-}
-```
+The second page configures the SSH server, username, password or private key,
+and one reverse-tunnel mapping. After saving, the ESP32 restarts and does not
+create either setup server during normal operation. Existing WiFi-only files
+automatically continue with this second phase.
 
-Edit only `examples/src/secrets.h` and set:
-
-```cpp
-#define WIFI_SSID       "your-wifi"
-#define WIFI_PASSWORD   "your-wifi-password"
-
-#define SSH_HOST        "your-bastion.example.com"
-#define SSH_PORT        22
-#define SSH_USER        "your-bastion-user"
-#define SSH_PASSWORD    "your-bastion-password"
-
-#define TUNNEL1_REMOTE_PORT 23180
-#define TUNNEL1_LOCAL_HOST  "192.168.1.1"
-#define TUNNEL1_LOCAL_PORT  22
-```
-
-Verify the file before every commit:
-
-```powershell
-git check-ignore -v examples/src/secrets.h
-git status --short
-```
-
-`examples/src/secrets.h` must not appear in `git status`.
+Passwords and the optional private key are stored as plain text in LittleFS.
+Treat physical flash access as credential access. SSH credentials are entered
+only after the device has joined the trusted WiFi network.
 
 ## Build, flash, and monitor
 
@@ -84,9 +66,8 @@ The hardware-validated `esp32_c3_lowmem` environment targets an ESP32-C3
 DevKitM-1 compatible board without PSRAM. It intentionally allows one listener
 and one active forwarded channel, uses a 4 KB transport buffer, 8 KB per tunnel
 direction, and a 4 KB prepend buffer. Native USB CDC is enabled for boards that
-expose the ESP32-C3 USB-Serial/JTAG interface directly. To avoid colliding with
-a stale S2 listener during side-by-side operation, this profile uses
-`TUNNEL1_REMOTE_PORT + 1` (23181 when the configured port is 23180).
+expose the ESP32-C3 USB-Serial/JTAG interface directly. The remote listener
+port is now selected explicitly on the tunnel setup page.
 
 ```powershell
 pio run -e esp32_c3_lowmem
@@ -107,8 +88,7 @@ The tested profile is suitable as the ESP32-C3 reference configuration.
 Boards with a different flash layout or USB implementation may still need a
 board-specific PlatformIO environment.
 
-Do not publish generated firmware images: credentials compiled from
-`secrets.h` are present in the binary.
+Do not publish LittleFS images or device backups containing credentials.
 
 ## Connecting through the reverse tunnel
 

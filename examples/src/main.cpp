@@ -1,14 +1,5 @@
-#include "secrets.h"
-
-const char *configSSHHost = SSH_HOST;
-const int configSSHPort = SSH_PORT;
-const char *configSSHPassword = SSH_PASSWORD;
-
-#undef SSH_HOST
-#undef SSH_PORT
-#undef SSH_PASSWORD
-
 #include "ESP-Reverse_Tunneling_Libssh2.h"
+#include "wifi_provisioning.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_heap_caps.h>
@@ -26,18 +17,9 @@ static constexpr size_t CRITICAL_LARGEST_BLOCK_BYTES = 4 * 1024;
 #define SSH_TUNNEL_LOW_MEMORY_PROFILE 0
 #endif
 
-#ifndef SSH_TUNNEL_REMOTE_PORT_OFFSET
-#define SSH_TUNNEL_REMOTE_PORT_OFFSET 0
-#endif
-
 #if SSH_TUNNEL_LOW_MEMORY_PROFILE && ENABLE_MULTI_TUNNEL_DEMO
 #error "The low-memory profile supports only one tunnel mapping"
 #endif
-
-static constexpr int TUNNEL_REMOTE_PORT =
-    TUNNEL1_REMOTE_PORT + SSH_TUNNEL_REMOTE_PORT_OFFSET;
-static_assert(TUNNEL_REMOTE_PORT > 0 && TUNNEL_REMOTE_PORT <= 65535,
-              "Configured tunnel remote port is outside the valid range");
 
 #if SSH_TUNNEL_LOW_MEMORY_PROFILE
 static constexpr int TUNNEL_TRANSPORT_BUFFER_SIZE = 4096;
@@ -51,6 +33,8 @@ static constexpr size_t TUNNEL_RING_BUFFER_SIZE = 64 * 1024;
 
 // SSH tunnel instance
 SSHTunnel tunnel;
+DeviceRuntimeConfig deviceConfig;
+bool tunnelRuntimeReady = false;
 
 // Monitoring variables
 unsigned long lastStatsReport = 0;
@@ -84,17 +68,39 @@ void setup() {
   LOG_I("MAIN", "Low-memory tunnel profile enabled");
 #endif
 
-  // SSH tunnel configuration
-  configureSSHTunnel();
+  if (!wifi_provisioning::begin(deviceConfig)) {
+    LOG_E("MAIN", "Unable to load or create WiFi configuration");
+    return;
+  }
+
+  if (wifi_provisioning::isActive()) {
+    LOG_I("MAIN", "WiFi setup mode active; tunnel startup is paused");
+    return;
+  }
 
   // WiFi connection
   connectWiFi();
+  if (WiFi.status() != WL_CONNECTED) {
+    LOG_E("MAIN", "WiFi is unavailable; tunnel startup is paused");
+    return;
+  }
+
+  if (!deviceConfig.setupComplete) {
+    if (!wifi_provisioning::startDeviceSetup(deviceConfig)) {
+      LOG_E("MAIN", "Unable to start tunnel setup page");
+    }
+    return;
+  }
+
+  // SSH tunnel configuration
+  configureSSHTunnel();
 
   // SSH tunnel initialization
   if (!tunnel.init()) {
     LOG_E("MAIN", "Failed to initialize SSH tunnel");
     return;
   }
+  tunnelRuntimeReady = true;
 
   // Start SSH connection
   if (!tunnel.connectSSH()) {
@@ -105,6 +111,16 @@ void setup() {
 }
 
 void loop() {
+  if (wifi_provisioning::isActive()) {
+    wifi_provisioning::loop();
+    return;
+  }
+
+  if (!tunnelRuntimeReady) {
+    vTaskDelay(pdMS_TO_TICKS(100));
+    return;
+  }
+
   // Check WiFi connection
   if (WiFi.status() != WL_CONNECTED) {
     LOG_W("MAIN", "WiFi disconnected, reconnecting...");
@@ -123,7 +139,8 @@ void loop() {
 
 void connectWiFi() {
   LOG_I("WIFI", "Connecting to WiFi...");
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(deviceConfig.wifiSsid.c_str(), deviceConfig.wifiPassword.c_str());
 
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 30) {
@@ -145,9 +162,17 @@ void connectWiFi() {
 void configureSSHTunnel() {
   LOG_I("CONFIG", "Configuring SSH tunnel...");
 
-  // ===== METHOD 1: SSH configuration with password =====
-  globalSSHConfig.setSSHServer(configSSHHost, configSSHPort, SSH_USER,
-                               configSSHPassword);
+  if (deviceConfig.sshAuthMethod == SSHAuthMethod::PrivateKey) {
+    globalSSHConfig.setSSHKeyAuthFromMemory(
+        deviceConfig.sshHost, deviceConfig.sshPort, deviceConfig.sshUsername,
+        deviceConfig.sshPrivateKey, "", deviceConfig.sshKeyPassphrase);
+    deviceConfig.sshPrivateKey = "";
+  } else {
+    globalSSHConfig.setSSHServer(deviceConfig.sshHost, deviceConfig.sshPort,
+                                 deviceConfig.sshUsername,
+                                 deviceConfig.sshPassword);
+    deviceConfig.sshPassword = "";
+  }
 
   // ===== METHOD 2: SSH configuration with key from LittleFS =====
   // This method automatically loads keys from LittleFS into memory
@@ -192,8 +217,9 @@ void configureSSHTunnel() {
   if (ENABLE_MULTI_TUNNEL_DEMO) {
     configureMultiTunnelMappings();
   } else {
-    globalSSHConfig.setTunnelConfig("127.0.0.1", TUNNEL_REMOTE_PORT,
-                                    TUNNEL1_LOCAL_HOST, TUNNEL1_LOCAL_PORT);
+    globalSSHConfig.setTunnelConfig(
+        deviceConfig.remoteBindHost, deviceConfig.remoteBindPort,
+        deviceConfig.localHost, deviceConfig.localPort);
   }
 
 #if SSH_TUNNEL_LOW_MEMORY_PROFILE
