@@ -42,10 +42,18 @@ which initializes the result to zero.
 ## Project implementation
 
 `pio_extra/patch_libssh2_rsa.py` applies the corrections to PlatformIO's
-downloaded dependency before compilation. The patcher is deliberately strict:
-it accepts the known vulnerable or corrected source forms and aborts the build
-if the pinned dependency no longer matches. This prevents a future dependency
-update from being modified silently at the wrong location.
+downloaded dependency before compilation. `library.json` registers it as the
+library's `build.extraScript`, so it also runs when this repository is installed
+through another project's `lib_deps`; consumers do not need to copy an
+`extra_scripts` setting into their own `platformio.ini`. The patcher is
+deliberately strict: it accepts the known vulnerable or corrected source forms
+and aborts the build if the pinned dependency no longer matches. This prevents
+a future dependency update from being modified silently at the wrong location.
+
+CI builds the standalone project and the `examples` consumer project, then
+checks the latter's downloaded `libssh2_esp` source for the corrected
+public-key result initialization. This protects the documented installation
+route rather than only the repository-root build.
 
 The patch also retains temporary, non-secret RSA diagnostics for compatibility
 testing. They report parser return codes, key type and size, and signing

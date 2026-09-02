@@ -7,6 +7,9 @@
   "dependencies": {
     "libssh2_esp": "https://github.com/playmiel/libssh2_esp.git#1.1"
   },
+  "build": {
+    "extraScript": "pio_extra/patch_libssh2_rsa.py"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/playmiel/ESP-Reverse_Tunneling_Libssh2.git"

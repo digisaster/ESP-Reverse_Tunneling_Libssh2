@@ -33,6 +33,9 @@ This is the candidate baseline for `esp32tun` reference firmware
 - Configure SSH keepalive only after successful authentication. This prevents
   a pre-authentication global request (`type 80`) from obscuring key failures
   in server logs.
+- PlatformIO consumer projects now run the pinned dependency's RSA
+  compatibility patch through `library.json`; previously it ran only for
+  repository-root builds.
 - The root PlatformIO project no longer compiles `examples/src/main.cpp`
   twice. `pio run -e lolin_s2_mini` now builds and links directly.
 - `setBufferConfig(..., channelTimeout, ...)` now stores and applies the

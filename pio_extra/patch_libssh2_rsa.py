@@ -11,12 +11,14 @@ from pathlib import Path
 
 Import("env")
 
-if env.IsIntegrationDump():
+project_env = DefaultEnvironment()
+
+if project_env.IsIntegrationDump():
     Return()
 
 dependency_source = (
-    Path(env.subst("$PROJECT_LIBDEPS_DIR"))
-    / env.subst("$PIOENV")
+    Path(project_env.subst("$PROJECT_LIBDEPS_DIR"))
+    / project_env.subst("$PIOENV")
     / "libssh2_esp"
     / "src"
     / "mbedtls.c"

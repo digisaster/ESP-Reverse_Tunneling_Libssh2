@@ -22,6 +22,8 @@ lib_deps =
 ```
 
 The library manifest installs the required `libssh2_esp` dependency.
+It also applies the pinned dependency's required RSA compatibility corrections
+automatically; consuming projects do not need an `extra_scripts` setting.
 
 ## First-boot WiFi setup
 

@@ -52,6 +52,13 @@ jobs:
         if: matrix.environment == 'arduino-3'
         run: pio run -e esp32dev -d examples
 
+      - name: Verify RSA patch in consumer dependency
+        if: matrix.environment == 'arduino-3'
+        run: |
+          sed -n '/_libssh2_mbedtls_pub_priv_key(/,/^}/p' \
+            examples/.pio/libdeps/esp32dev/libssh2_esp/src/mbedtls.c \
+            | grep -Fq 'int ret = 0;'
+
   lint:
     runs-on: ubuntu-latest
     steps:
