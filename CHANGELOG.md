@@ -14,8 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/esp32tun.cfg`, and restarts without activating the setup server again.
 - Two-phase provisioning now configures password or private-key SSH
   authentication and one reverse tunnel without editing source files.
-- Local `examples/src/secrets.h` configuration with a tracked
-  `secrets.example.h` template. The real secrets file is ignored by Git.
+- Holding the board's BOOT button for four seconds during normal operation
+  clears the stored provisioning data and restarts the setup portal.
 - Dedicated native regression coverage for configured channel inactivity,
   disabled timeouts, and `millis()` wraparound.
 - Initial `esp32_c3_lowmem` build profile for a single reverse listener and
@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed a one-byte heap overflow in the pinned libssh2_esp RSA public-key
+  derivation that crashed ESP32-C3 private-key authentication.
 - The root PlatformIO project no longer compiles `examples/src/main.cpp`
   twice. `pio run -e lolin_s2_mini` now builds and links directly.
 - `setBufferConfig(..., channelTimeout, ...)` now stores and applies the

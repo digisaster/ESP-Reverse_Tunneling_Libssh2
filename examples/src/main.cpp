@@ -111,6 +111,8 @@ void setup() {
 }
 
 void loop() {
+  wifi_provisioning::pollConfigResetButton();
+
   if (wifi_provisioning::isActive()) {
     wifi_provisioning::loop();
     return;

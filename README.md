@@ -38,6 +38,14 @@ Passwords and the optional private key are stored as plain text in LittleFS.
 Treat physical flash access as credential access. SSH credentials are entered
 only after the device has joined the trusted WiFi network.
 
+### Reopen configuration
+
+To replace an incorrect or outdated configuration, leave the firmware running
+and hold the board's **BOOT** button for four seconds. Do not press RESET. The
+reference firmware removes only `/esp32tun.cfg` and the stored SSH private key,
+then restarts the open first-boot portal. This is enabled on GPIO 0 for the
+LOLIN S2 Mini and GPIO 9 for the ESP32-C3 reference target.
+
 ## Build, flash, and monitor
 
 Run these commands from the repository root:
@@ -164,18 +172,20 @@ Treat enabling verification as a required production-hardening step.
 
 ## Multiple tunnels
 
-The example defaults to one mapping from `secrets.h`. Set
-`ENABLE_MULTI_TUNNEL_DEMO` to `1` only when intentionally testing the sample
-multi-listener configuration. Applications can use `clearTunnelMappings()`,
+The provisioning page configures one mapping. Set `ENABLE_MULTI_TUNNEL_DEMO`
+to `1` only when intentionally testing the hard-coded sample multi-listener
+configuration. Applications can use `clearTunnelMappings()`,
 `setMaxReverseListeners()`, and `addTunnelMapping()` to configure several
 listeners before `connectSSH()`.
 
 ## Tested resource usage
 
-Latest `lolin_s2_mini` release build:
+Latest release builds:
 
-- RAM: 62,420 / 327,680 bytes (19.0%)
-- Flash: 1,065,046 / 1,310,720 bytes (81.3%)
+| Environment | RAM | Flash |
+| --- | ---: | ---: |
+| `lolin_s2_mini` | 62,820 / 327,680 bytes (19.2%) | 1,161,070 / 1,310,720 bytes (88.6%) |
+| `esp32_c3_lowmem` | 39,432 / 327,680 bytes (12.0%) | 1,226,520 / 1,310,720 bytes (93.6%) |
 
 ## Documentation
 
