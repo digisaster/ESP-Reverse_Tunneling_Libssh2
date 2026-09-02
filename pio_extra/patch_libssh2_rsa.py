@@ -105,6 +105,17 @@ diagnostic_sign_error = """    if(ret) {
     *signature = sig;
 """
 
+uninitialized_public_key_result = """    int ret;
+    mbedtls_rsa_context *rsa;
+
+    if(mbedtls_pk_get_type(pkey) != MBEDTLS_PK_RSA) {
+"""
+initialized_public_key_result = """    int ret = 0;
+    mbedtls_rsa_context *rsa;
+
+    if(mbedtls_pk_get_type(pkey) != MBEDTLS_PK_RSA) {
+"""
+
 if not dependency_source.is_file():
     raise RuntimeError(
         f"Cannot patch libssh2_esp: source file not found at {dependency_source}"
@@ -133,6 +144,18 @@ if not rsa_initialized:
             "differs from the pinned 1.1 source"
         )
     source = source.replace(vulnerable_rsa_init, corrected_rsa_init, 1)
+    changed = True
+
+public_key_result_initialized = initialized_public_key_result in source
+if not public_key_result_initialized:
+    if source.count(uninitialized_public_key_result) != 1:
+        raise RuntimeError(
+            "Cannot patch libssh2_esp safely: the RSA public-key derivation "
+            "differs from the pinned 1.1 source"
+        )
+    source = source.replace(
+        uninitialized_public_key_result, initialized_public_key_result, 1
+    )
     changed = True
 
 if diagnostic_parse_result not in source:
