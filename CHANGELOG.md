@@ -23,8 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fixed a one-byte heap overflow in the pinned libssh2_esp RSA public-key
-  derivation that crashed ESP32-C3 private-key authentication.
+- Fixed a one-byte heap overflow and missing RSA-context initialization in the
+  pinned libssh2_esp dependency that broke private-key authentication.
 - The root PlatformIO project no longer compiles `examples/src/main.cpp`
   twice. `pio run -e lolin_s2_mini` now builds and links directly.
 - `setBufferConfig(..., channelTimeout, ...)` now stores and applies the

@@ -185,7 +185,7 @@ Latest release builds:
 | Environment | RAM | Flash |
 | --- | ---: | ---: |
 | `lolin_s2_mini` | 62,820 / 327,680 bytes (19.2%) | 1,161,070 / 1,310,720 bytes (88.6%) |
-| `esp32_c3_lowmem` | 39,432 / 327,680 bytes (12.0%) | 1,226,520 / 1,310,720 bytes (93.6%) |
+| `esp32_c3_lowmem` | 39,432 / 327,680 bytes (12.0%) | 1,226,524 / 1,310,720 bytes (93.6%) |
 
 ## Documentation
 

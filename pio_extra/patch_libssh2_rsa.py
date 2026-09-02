@@ -1,9 +1,10 @@
-"""Patch the pinned libssh2_esp RSA public-key buffer overflow.
+"""Patch the pinned libssh2_esp RSA in-memory key bugs.
 
 libssh2_esp tag 1.1 increments the RSA modulus length after allocating the
 SSH public-key blob. A full-size RSA modulus therefore writes one byte beyond
-the allocation. Keep this strict and fail if the dependency no longer matches
-either the vulnerable or corrected form.
+the allocation. It also copies a parsed private key into an uninitialized RSA
+context, which makes signing fail. Keep this strict and fail if the dependency
+no longer matches either the vulnerable or corrected form.
 """
 
 from pathlib import Path
@@ -28,6 +29,20 @@ corrected_size = (
     "    n_bytes = (uint32_t)mbedtls_mpi_size(&rsa->MBEDTLS_PRIVATE(N)) + 1;"
 )
 late_increment = "    n_bytes++;      /* Add 1 to bignum size */\n"
+vulnerable_rsa_init = """    *rsa = (libssh2_rsa_ctx *) mbedtls_calloc(1, sizeof(libssh2_rsa_ctx));
+    if(!*rsa)
+        return -1;
+
+    /*
+"""
+corrected_rsa_init = """    *rsa = (libssh2_rsa_ctx *) mbedtls_calloc(1, sizeof(libssh2_rsa_ctx));
+    if(!*rsa)
+        return -1;
+
+    mbedtls_rsa_init(*rsa);
+
+    /*
+"""
 
 if not dependency_source.is_file():
     raise RuntimeError(
@@ -35,9 +50,10 @@ if not dependency_source.is_file():
     )
 
 source = dependency_source.read_text(encoding="utf-8")
-already_corrected = corrected_size in source and late_increment not in source
+changed = False
+buffer_corrected = corrected_size in source and late_increment not in source
 
-if not already_corrected:
+if not buffer_corrected:
     if source.count(vulnerable_size) != 1 or source.count(late_increment) != 1:
         raise RuntimeError(
             "Cannot patch libssh2_esp safely: the RSA implementation differs "
@@ -46,5 +62,18 @@ if not already_corrected:
 
     source = source.replace(vulnerable_size, corrected_size, 1)
     source = source.replace(late_increment, "", 1)
+    changed = True
+
+rsa_initialized = corrected_rsa_init in source
+if not rsa_initialized:
+    if source.count(vulnerable_rsa_init) != 1:
+        raise RuntimeError(
+            "Cannot patch libssh2_esp safely: the RSA private-key loader "
+            "differs from the pinned 1.1 source"
+        )
+    source = source.replace(vulnerable_rsa_init, corrected_rsa_init, 1)
+    changed = True
+
+if changed:
     dependency_source.write_text(source, encoding="utf-8", newline="\n")
-    print("Patched libssh2_esp RSA public-key buffer allocation")
+    print("Patched libssh2_esp RSA in-memory key handling")
