@@ -50,4 +50,5 @@ __pycache__/
 # Local-only design docs / specs / plans / test reports
 docs/superpowers/
 
+# Protect legacy local credential files left by versions before provisioning.
 examples/src/secrets.h

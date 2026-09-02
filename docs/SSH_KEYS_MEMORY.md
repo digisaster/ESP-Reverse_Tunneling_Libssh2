@@ -2,6 +2,12 @@
 
 This guide explains how to use SSH public key authentication with keys stored directly in memory instead of filesystem files, which is often more reliable with LittleFS on ESP32.
 
+The current reference firmware does not require source-code changes or a
+manual LittleFS upload. Select **Private key** on the temporary tunnel setup
+page and paste a device-specific RSA private key. The firmware stores it in
+LittleFS and loads it into memory during startup. Treat physical flash access
+as access to the unencrypted private key.
+
 ## Advantages of in‑memory key authentication
 
 - **LittleFS compatibility**: Avoids file read issues
@@ -158,8 +164,8 @@ void setup() {
 
 ## Compatibility
 
-- ✅ OpenSSH private key format
-- ✅ PEM private key format  
-- ✅ RSA keys
-- ✅ ED25519 keys (if supported by libssh2)
-- ✅ Keys with or without passphrase
+- ✅ RSA private keys in PEM format
+- ✅ Keys with or without a passphrase
+- ⚠️ Modern OpenSSH containers may depend on parser support in the pinned
+  libssh2_esp version; RSA PEM is recommended for the reference firmware
+- ❌ Ed25519 is not supported by the pinned mbedTLS key-authentication path

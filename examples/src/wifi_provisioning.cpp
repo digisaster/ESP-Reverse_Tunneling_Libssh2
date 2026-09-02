@@ -5,6 +5,10 @@
 #include <WebServer.h>
 #include <WiFi.h>
 
+#ifndef ESP32TUN_CONFIG_BUTTON_PIN
+#define ESP32TUN_CONFIG_BUTTON_PIN -1
+#endif
+
 namespace wifi_provisioning {
 namespace {
 constexpr char CONFIG_PATH[] = "/esp32tun.cfg";
@@ -13,6 +17,7 @@ constexpr char KEY_PATH[] = "/esp32tun_ssh_key";
 constexpr char KEY_TEMP[] = "/esp32tun_ssh_key.tmp";
 constexpr unsigned long WIFI_TIMEOUT_MS = 20000;
 constexpr size_t MAX_KEY_SIZE = 16384;
+constexpr unsigned long CONFIG_RESET_HOLD_MS = 4000;
 
 enum class PortalMode { None, Wifi, Device };
 WebServer *server = nullptr;
@@ -21,6 +26,8 @@ DeviceRuntimeConfig *current = nullptr;
 PortalMode mode = PortalMode::None;
 bool transitionPending = false;
 unsigned long transitionAt = 0;
+unsigned long buttonPressedAt = 0;
+bool buttonWasPressed = false;
 
 bool isUnreserved(char c) {
   return isAlphaNumeric(c) || c == '-' || c == '_' || c == '.';
@@ -473,6 +480,10 @@ bool begin(DeviceRuntimeConfig &config) {
   current = &config;
   if (!mountStorage())
     return false;
+#if ESP32TUN_CONFIG_BUTTON_PIN >= 0
+  pinMode(ESP32TUN_CONFIG_BUTTON_PIN, INPUT_PULLUP);
+  LOG_I("SETUP", "Hold BOOT for 4 seconds to reset device configuration");
+#endif
   if (loadConfig(config))
     return true;
   return startWifiPortal();
@@ -482,6 +493,33 @@ bool startDeviceSetup(DeviceRuntimeConfig &config) {
   return WiFi.status() == WL_CONNECTED && startDevicePortalInternal();
 }
 bool isActive() { return mode != PortalMode::None; }
+void pollConfigResetButton() {
+#if ESP32TUN_CONFIG_BUTTON_PIN >= 0
+  const bool pressed = digitalRead(ESP32TUN_CONFIG_BUTTON_PIN) == LOW;
+  if (!pressed) {
+    buttonWasPressed = false;
+    buttonPressedAt = 0;
+    return;
+  }
+  if (!buttonWasPressed) {
+    buttonWasPressed = true;
+    buttonPressedAt = millis();
+    LOG_I("SETUP", "BOOT pressed; keep holding to reset configuration");
+    return;
+  }
+  if (millis() - buttonPressedAt < CONFIG_RESET_HOLD_MS)
+    return;
+
+  LOG_W("SETUP", "BOOT held: removing stored configuration and restarting");
+  stopServices();
+  LittleFS.remove(CONFIG_PATH);
+  LittleFS.remove(CONFIG_TEMP);
+  LittleFS.remove(KEY_PATH);
+  LittleFS.remove(KEY_TEMP);
+  delay(250);
+  ESP.restart();
+#endif
+}
 void loop() {
   if (mode == PortalMode::Wifi && dns)
     dns->processNextRequest();

@@ -6,16 +6,21 @@ prints periodic diagnostics.
 
 ## Device configuration
 
-The reference firmware now ignores these compile-time example values and uses
-device provisioning. If `/esp32tun.cfg` does not exist, the
-firmware starts an open `esp32tun-XXXXXX` setup network. A captive portal
-normally opens the setup page automatically; `http://192.168.4.1` is printed as
-a fallback. The page scans for networks, tests the entered password, saves it
-to LittleFS, and restarts. After that restart the setup services are not
-created. This initial implementation stores the WiFi password as plain text on
-the device. After WiFi succeeds, a temporary second page on the trusted network
-configures password or private-key authentication and one reverse tunnel.
-Neither web server runs after the completed configuration restarts.
+The firmware is configured entirely on the device. If `/esp32tun.cfg` does not
+exist, it starts an open `esp32tun-XXXXXX` network. A captive portal normally
+opens automatically; `http://192.168.4.1` is the fallback. The first page scans
+for WiFi networks and tests the entered credentials. It then closes the open
+network and automatically tries to continue on the selected WiFi network.
+
+The temporary second page configures password or private-key SSH
+authentication and one reverse tunnel. Saving restarts the board. Neither web
+server runs during normal tunnel operation. Credentials are stored as plain
+text in LittleFS and must be protected accordingly.
+
+To configure the device again, leave it running and hold **BOOT** for four
+seconds without pressing RESET. The firmware removes the saved configuration
+and private key and restarts the first-boot portal. The configured button pin
+is GPIO 0 on the LOLIN S2 Mini and GPIO 9 on the ESP32-C3 target.
 
 ## WEMOS LOLIN S2 Mini
 

@@ -45,9 +45,6 @@ jobs:
           pio pkg install
           pio pkg install -d examples
 
-      - name: Create safe example configuration
-        run: cp examples/src/secrets.example.h examples/src/secrets.h
-
       - name: Build ${{ matrix.environment }}
         run: pio run -e ${{ matrix.environment }}
 
