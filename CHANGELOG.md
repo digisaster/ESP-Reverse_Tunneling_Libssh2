@@ -5,7 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 2026-08-26
+## [Unreleased] — 2026-09-03
+
+This is the candidate baseline for `esp32tun` reference firmware
+`1.0.0-beta.1`. The Arduino library retains its existing 2.x version line.
 
 ### Added
 
@@ -23,8 +26,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fixed a one-byte heap overflow in the pinned libssh2_esp RSA public-key
-  derivation that crashed ESP32-C3 private-key authentication.
+- Fixed three defects in the pinned `libssh2_esp` RSA path: a one-byte public
+  key buffer overflow, a missing RSA-context initialization, and an
+  uninitialized public-key derivation result. The last defect returned a local
+  authentication error before the public key was sent to the SSH server.
+- Configure SSH keepalive only after successful authentication. This prevents
+  a pre-authentication global request (`type 80`) from obscuring key failures
+  in server logs.
+- PlatformIO consumer projects now run the pinned dependency's RSA
+  compatibility patch through `library.json`; previously it ran only for
+  repository-root builds.
 - The root PlatformIO project no longer compiles `examples/src/main.cpp`
   twice. `pio run -e lolin_s2_mini` now builds and links directly.
 - `setBufferConfig(..., channelTimeout, ...)` now stores and applies the
@@ -51,11 +62,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ESP32-C3 hardware testing confirmed an active forwarded SSH channel,
   repeated channel close and reopen, 30-second keepalive messages, zero dropped
   bytes, and heap recovery after channel closure.
+- ESP32-C3 hardware testing confirmed unencrypted RSA-PEM private-key
+  authentication and reverse-listener creation. Modern key formats remain a
+  separate compatibility test phase.
 
 ### Documentation
 
 - Added safe configuration, build, flash, serial-monitor, reverse-listener,
   stale-listener, and channel-timeout instructions.
+- Added a technical record of the pinned `libssh2_esp` RSA compatibility patch
+  and the validated beta baseline.
 
 ## [2.2.0] — 2026-04-30 — Stabilization
 

@@ -127,9 +127,6 @@ bool SSHSession::connect(SSHConfiguration *config) {
     cleanupSession();
     return false;
   }
-  if (!configureKeepalive(connConfig)) {
-    // Non-fatal, just log
-  }
   if (!verifyHostKey(sshConfig)) {
     LOG_E("SSH", "Host key verification failed");
     cleanupSession();
@@ -139,6 +136,9 @@ bool SSHSession::connect(SSHConfiguration *config) {
     LOG_E("SSH", "Authentication failed");
     cleanupSession();
     return false;
+  }
+  if (!configureKeepalive(connConfig)) {
+    // Non-fatal, just log
   }
   if (!createListeners(config_)) {
     LOG_E("SSH", "Failed to create reverse listeners");

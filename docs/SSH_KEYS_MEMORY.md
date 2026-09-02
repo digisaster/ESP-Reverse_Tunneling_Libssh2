@@ -164,8 +164,15 @@ void setup() {
 
 ## Compatibility
 
-- ✅ RSA private keys in PEM format
-- ✅ Keys with or without a passphrase
+- ✅ Unencrypted RSA private keys in traditional PEM format
+  (`-----BEGIN RSA PRIVATE KEY-----`) are hardware-validated on the
+  `esp32_c3_lowmem` target
+- 🧪 Encrypted RSA PEM, PKCS#8, and modern OpenSSH private-key containers still
+  require systematic hardware validation
 - ⚠️ Modern OpenSSH containers may depend on parser support in the pinned
   libssh2_esp version; RSA PEM is recommended for the reference firmware
 - ❌ Ed25519 is not supported by the pinned mbedTLS key-authentication path
+
+See [RSA key authentication fix and validation](RSA_KEY_AUTH_FIX.md) for the
+dependency defects fixed by the build-time compatibility patch and the exact
+scope of the beta validation.
