@@ -31,6 +31,8 @@ globalSSHConfig.setSSHServer("server.com", 22, "username", "password");
 
 ### SSH key authentication (recommended)
 
+- [RSA key authentication fix and ESP32-C3 validation](RSA_KEY_AUTH_FIX.md)
+
 ```cpp
 globalSSHConfig.setSSHKeyAuthFromMemory(
     "server.com", 22, "username", 

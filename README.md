@@ -2,6 +2,12 @@
 
 Arduino library for creating reverse SSH tunnels from an ESP32 with libssh2.
 
+**Release status:** the no-code `esp32tun` reference firmware is a
+**1.0.0-beta.1 candidate**. WiFi provisioning, tunnel provisioning, password
+authentication, and RSA-PEM private-key authentication have been validated on
+the ESP32-C3 low-memory target. Modern private-key formats and host-key
+verification are not part of this beta baseline yet.
+
 The current reference target is a WEMOS LOLIN S2 Mini. It has been tested with
 Wi-Fi, password authentication, a reverse SSH listener, an interactive SSH
 channel, automatic reconnection, and a 45-minute uninterrupted idle session.
@@ -96,6 +102,11 @@ The tested profile is suitable as the ESP32-C3 reference configuration.
 Boards with a different flash layout or USB implementation may still need a
 board-specific PlatformIO environment.
 
+RSA-PEM authentication was also validated on ESP32-C3 hardware. The pinned
+`libssh2_esp` dependency requires a build-time compatibility patch; its cause,
+implementation, and test evidence are recorded in
+[RSA key authentication fix](docs/RSA_KEY_AUTH_FIX.md).
+
 Do not publish LittleFS images or device backups containing credentials.
 
 ## Connecting through the reverse tunnel
@@ -165,6 +176,7 @@ Password authentication is supported for initial testing. SSH key
 authentication and host-key verification are recommended for production:
 
 - [SSH key authentication](docs/SSH_KEYS_MEMORY.md)
+- [RSA key authentication fix and validation](docs/RSA_KEY_AUTH_FIX.md)
 - [Host-key verification](docs/HOST_KEY_VERIFICATION.md)
 
 The example currently logs a warning when host-key verification is disabled.
