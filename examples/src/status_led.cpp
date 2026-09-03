@@ -46,7 +46,7 @@ bool outputFor(State state, uint32_t elapsed) {
     return (phase < 120) || (phase >= 300 && phase < 420);
   }
   case State::Connected:
-    return (elapsed % 3000) < 80;
+    return false;
   case State::Error: {
     const uint32_t phase = elapsed % 2000;
     return (phase < 120) || (phase >= 300 && phase < 420) ||

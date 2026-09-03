@@ -123,7 +123,7 @@ firmware loop.
 | No valid configuration | Three short flashes once, followed by setup blinking |
 | Setup page active | 0.5 seconds on, 0.5 seconds off |
 | WiFi or SSH connection in progress | Two short flashes every 2 seconds |
-| Reverse tunnel connected | One short heartbeat every 3 seconds |
+| Reverse tunnel connected | Off |
 | Connection or authentication error | Three short flashes every 2 seconds |
 
 GPIO 8 active-low matches the validated C3 hardware. Boards with an addressable
