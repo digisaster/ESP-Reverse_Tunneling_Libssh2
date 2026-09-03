@@ -15,9 +15,12 @@ constexpr char CONFIG_PATH[] = "/esp32tun.cfg";
 constexpr char CONFIG_TEMP[] = "/esp32tun.cfg.tmp";
 constexpr char KEY_PATH[] = "/esp32tun_ssh_key";
 constexpr char KEY_TEMP[] = "/esp32tun_ssh_key.tmp";
+constexpr char EDIT_REQUEST_PATH[] = "/esp32tun.edit";
 constexpr unsigned long WIFI_TIMEOUT_MS = 20000;
 constexpr size_t MAX_KEY_SIZE = 16384;
 constexpr unsigned long CONFIG_RESET_HOLD_MS = 4000;
+constexpr unsigned long CONFIG_CLICK_MIN_MS = 40;
+constexpr unsigned long CONFIG_CLICK_WINDOW_MS = 2000;
 
 enum class PortalMode { None, Wifi, Device };
 WebServer *server = nullptr;
@@ -28,6 +31,9 @@ bool transitionPending = false;
 unsigned long transitionAt = 0;
 unsigned long buttonPressedAt = 0;
 bool buttonWasPressed = false;
+uint8_t buttonClickCount = 0;
+unsigned long buttonClickWindowStartedAt = 0;
+bool configEditRequested = false;
 
 bool isUnreserved(char c) {
   return isAlphaNumeric(c) || c == '-' || c == '_' || c == '.';
@@ -296,37 +302,50 @@ void sendDevicePage(const String &error = "") {
   String p = pageStart("esp32tun tunnel setup");
   p += F("<p>Configure the SSH server and one reverse tunnel.</p>");
   addError(p, error);
-  p +=
-      F("<form method='post' action='/save-device'><div "
-        "class='grid'><div><label>SSH server</label><input name='ssh_host' "
-        "required maxlength='253'></div><div><label>SSH port</label><input "
-        "name='ssh_port' type='number' min='1' max='65535' "
-        "value='22'></div></div><label>SSH username</label><input "
-        "name='ssh_user' required "
-        "maxlength='128'><label>Authentication</label><select id='auth' "
-        "name='ssh_auth' onchange='toggleAuth()'><option "
-        "value='password'>Password</option><option value='key'>Private "
-        "key</option></select><div id='password-fields'><label>SSH "
-        "password</label><input name='ssh_password' type='password'></div><div "
-        "id='key-fields' class='hidden'><label>Private key</label><textarea "
-        "name='ssh_private_key' maxlength='16384' placeholder='-----BEGIN ... "
-        "PRIVATE KEY-----'></textarea><label>Key passphrase "
-        "(optional)</label><input name='ssh_key_passphrase' "
-        "type='password'></div><h2>Reverse tunnel</h2><div "
-        "class='grid'><div><label>Remote bind address</label><input "
-        "name='remote_host' value='127.0.0.1'></div><div><label>Remote "
-        "port</label><input name='remote_port' type='number' min='1' "
-        "max='65535' value='23180'></div></div><div "
-        "class='grid'><div><label>Local target</label><input name='local_host' "
-        "value='192.168.1.1'></div><div><label>Local port</label><input "
-        "name='local_port' type='number' min='1' max='65535' "
-        "value='22'></div></div><button>Save and start "
-        "tunnel</button></form><p class='note'>The setup server is disabled "
-        "after restart.</p><script>function toggleAuth(){let "
-        "k=document.getElementById('auth').value==='key';document."
-        "getElementById('password-fields').className=k?'hidden':'';document."
-        "getElementById('key-fields').className=k?'':'hidden'}toggleAuth()</"
-        "script></main></body></html>");
+  p += F("<form method='post' action='/save-device'><div class='grid'><div>"
+         "<label>SSH server</label><input name='ssh_host' required "
+         "maxlength='253' value='");
+  p += escapeHtml(current->sshHost);
+  p += F("'></div><div><label>SSH port</label><input name='ssh_port' "
+         "type='number' min='1' max='65535' value='");
+  p += String(current->sshPort);
+  p += F("'></div></div><label>SSH username</label><input name='ssh_user' "
+         "required maxlength='128' value='");
+  p += escapeHtml(current->sshUsername);
+  p += F("'><label>Authentication</label><select id='auth' name='ssh_auth' "
+         "onchange='toggleAuth()'><option value='password'");
+  if (current->sshAuthMethod == SSHAuthMethod::Password)
+    p += F(" selected");
+  p += F(">Password</option><option value='key'");
+  if (current->sshAuthMethod == SSHAuthMethod::PrivateKey)
+    p += F(" selected");
+  p += F(">Private key</option></select><div id='password-fields'><label>SSH "
+         "password</label><input name='ssh_password' type='password' "
+         "placeholder='Leave blank to keep the stored password'></div><div "
+         "id='key-fields' class='hidden'><label>Private key</label><textarea "
+         "name='ssh_private_key' maxlength='16384' placeholder='Leave blank "
+         "to keep the stored private key'></textarea><label>Key passphrase "
+         "(optional)</label><input name='ssh_key_passphrase' type='password' "
+         "placeholder='Leave blank to keep the stored passphrase'></div><h2>"
+         "Reverse tunnel</h2><div class='grid'><div><label>Remote bind "
+         "address</label><input name='remote_host' value='");
+  p += escapeHtml(current->remoteBindHost);
+  p += F("'></div><div><label>Remote port</label><input name='remote_port' "
+         "type='number' min='1' max='65535' value='");
+  p += String(current->remoteBindPort);
+  p += F("'></div></div><div class='grid'><div><label>Local target</label>"
+         "<input name='local_host' value='");
+  p += escapeHtml(current->localHost);
+  p += F("'></div><div><label>Local port</label><input name='local_port' "
+         "type='number' min='1' max='65535' value='");
+  p += String(current->localPort);
+  p += F("'></div></div><button>Save and start tunnel</button></form><p "
+         "class='note'>Stored passwords and private keys are never displayed. "
+         "Leave those fields empty to keep them unchanged.</p><script>function "
+         "toggleAuth(){let k=document.getElementById('auth').value==='key';"
+         "document.getElementById('password-fields').className=k?'hidden':'';"
+         "document.getElementById('key-fields').className=k?'':'hidden'}"
+         "toggleAuth()</script></main></body></html>");
   server->send(200, "text/html; charset=utf-8", p);
 }
 void stopServices() {
@@ -349,6 +368,7 @@ bool startDevicePortalInternal() {
   server->on("/", HTTP_GET, [] { sendDevicePage(); });
   server->on("/save-device", HTTP_POST, [] {
     DeviceRuntimeConfig c = *current;
+    const SSHAuthMethod storedAuthMethod = current->sshAuthMethod;
     c.sshHost = server->arg("ssh_host");
     c.sshUsername = server->arg("ssh_user");
     c.remoteBindHost = server->arg("remote_host");
@@ -362,10 +382,21 @@ bool startDevicePortalInternal() {
     c.sshAuthMethod = server->arg("ssh_auth") == "key"
                           ? SSHAuthMethod::PrivateKey
                           : SSHAuthMethod::Password;
-    c.sshPassword = server->arg("ssh_password");
-    c.sshPrivateKey = server->arg("ssh_private_key");
-    c.sshPrivateKey.replace("\r\n", "\n");
-    c.sshKeyPassphrase = server->arg("ssh_key_passphrase");
+    const String submittedPassword = server->arg("ssh_password");
+    String submittedKey = server->arg("ssh_private_key");
+    submittedKey.replace("\r\n", "\n");
+    const String submittedPassphrase = server->arg("ssh_key_passphrase");
+    if (c.sshAuthMethod == SSHAuthMethod::Password) {
+      if (!submittedPassword.isEmpty() ||
+          storedAuthMethod != SSHAuthMethod::Password)
+        c.sshPassword = submittedPassword;
+    } else if (!submittedKey.isEmpty()) {
+      c.sshPrivateKey = submittedKey;
+      c.sshKeyPassphrase = submittedPassphrase;
+    } else if (storedAuthMethod == SSHAuthMethod::PrivateKey &&
+               !submittedPassphrase.isEmpty()) {
+      c.sshKeyPassphrase = submittedPassphrase;
+    }
     c.setupComplete = true;
     if (!validDeviceConfig(c)) {
       sendDevicePage(c.sshAuthMethod == SSHAuthMethod::PrivateKey
@@ -388,6 +419,8 @@ bool startDevicePortalInternal() {
       sendDevicePage("The configuration could not be stored.");
       return;
     }
+    LittleFS.remove(EDIT_REQUEST_PATH);
+    configEditRequested = false;
     String p = pageStart("Setup complete");
     p += F("<p>The device will restart and start the reverse "
            "tunnel.</p></main></body></html>");
@@ -482,8 +515,9 @@ bool begin(DeviceRuntimeConfig &config) {
     return false;
 #if ESP32TUN_CONFIG_BUTTON_PIN >= 0
   pinMode(ESP32TUN_CONFIG_BUTTON_PIN, INPUT_PULLUP);
-  LOG_I("SETUP", "Hold BOOT for 4 seconds to reset device configuration");
+  LOG_I("SETUP", "Press BOOT 3 times to edit, or hold 4 seconds to reset");
 #endif
+  configEditRequested = LittleFS.exists(EDIT_REQUEST_PATH);
   if (loadConfig(config))
     return true;
   return startWifiPortal();
@@ -493,21 +527,51 @@ bool startDeviceSetup(DeviceRuntimeConfig &config) {
   return WiFi.status() == WL_CONNECTED && startDevicePortalInternal();
 }
 bool isActive() { return mode != PortalMode::None; }
+bool editRequested() { return configEditRequested; }
 void pollConfigResetButton() {
 #if ESP32TUN_CONFIG_BUTTON_PIN >= 0
+  const unsigned long now = millis();
   const bool pressed = digitalRead(ESP32TUN_CONFIG_BUTTON_PIN) == LOW;
   if (!pressed) {
-    buttonWasPressed = false;
-    buttonPressedAt = 0;
+    if (buttonWasPressed) {
+      const unsigned long pressDuration = now - buttonPressedAt;
+      buttonWasPressed = false;
+      buttonPressedAt = 0;
+      if (pressDuration >= CONFIG_CLICK_MIN_MS &&
+          pressDuration < CONFIG_RESET_HOLD_MS) {
+        if (buttonClickCount > 0 &&
+            now - buttonClickWindowStartedAt > CONFIG_CLICK_WINDOW_MS)
+          buttonClickCount = 0;
+        if (buttonClickCount == 0)
+          buttonClickWindowStartedAt = now;
+        ++buttonClickCount;
+        LOGF_I("SETUP", "BOOT click %u/3", buttonClickCount);
+        if (buttonClickCount >= 3) {
+          File marker = LittleFS.open(EDIT_REQUEST_PATH, "w");
+          if (!marker) {
+            LOG_E("SETUP", "Unable to store configuration edit request");
+            buttonClickCount = 0;
+            return;
+          }
+          marker.print('1');
+          marker.close();
+          LOG_I("SETUP", "Opening stored configuration after restart");
+          delay(250);
+          ESP.restart();
+        }
+      }
+    } else if (buttonClickCount > 0 &&
+               now - buttonClickWindowStartedAt > CONFIG_CLICK_WINDOW_MS) {
+      buttonClickCount = 0;
+    }
     return;
   }
   if (!buttonWasPressed) {
     buttonWasPressed = true;
-    buttonPressedAt = millis();
-    LOG_I("SETUP", "BOOT pressed; keep holding to reset configuration");
+    buttonPressedAt = now;
     return;
   }
-  if (millis() - buttonPressedAt < CONFIG_RESET_HOLD_MS)
+  if (now - buttonPressedAt < CONFIG_RESET_HOLD_MS)
     return;
 
   LOG_W("SETUP", "BOOT held: removing stored configuration and restarting");
@@ -516,6 +580,7 @@ void pollConfigResetButton() {
   LittleFS.remove(CONFIG_TEMP);
   LittleFS.remove(KEY_PATH);
   LittleFS.remove(KEY_TEMP);
+  LittleFS.remove(EDIT_REQUEST_PATH);
   delay(250);
   ESP.restart();
 #endif

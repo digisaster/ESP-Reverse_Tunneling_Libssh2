@@ -24,6 +24,7 @@ namespace wifi_provisioning {
 bool begin(DeviceRuntimeConfig &config);
 bool startDeviceSetup(DeviceRuntimeConfig &config);
 bool isActive();
+bool editRequested();
 void pollConfigResetButton();
 void loop();
 } // namespace wifi_provisioning

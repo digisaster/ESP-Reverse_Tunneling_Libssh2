@@ -17,7 +17,13 @@ authentication and one reverse tunnel. Saving restarts the board. Neither web
 server runs during normal tunnel operation. Credentials are stored as plain
 text in LittleFS and must be protected accordingly.
 
-To configure the device again, leave it running and hold **BOOT** for four
+To edit the tunnel configuration without losing WiFi or SSH credentials, press
+**BOOT** three times within two seconds. The firmware restarts, reconnects to
+WiFi, and opens the tunnel setup page at the IP address in the serial log.
+Hidden password and private-key fields keep their stored values when left
+empty.
+
+For a complete reset, leave the device running and hold **BOOT** for four
 seconds without pressing RESET. The firmware removes the saved configuration
 and private key and restarts the first-boot portal. The configured button pin
 is GPIO 0 on the LOLIN S2 Mini and GPIO 9 on the ESP32-C3 target.

@@ -48,11 +48,16 @@ only after the device has joined the trusted WiFi network.
 
 ### Reopen configuration
 
-To replace an incorrect or outdated configuration, leave the firmware running
-and hold the board's **BOOT** button for four seconds. Do not press RESET. The
-reference firmware removes only `/esp32tun.cfg` and the stored SSH private key,
-then restarts the open first-boot portal. This is enabled on GPIO 0 for the
-LOLIN S2 Mini and GPIO 9 for the ESP32-C3 reference target.
+To edit an existing tunnel configuration, press the board's **BOOT** button
+three times within two seconds. The ESP32 restarts, reconnects to the stored
+WiFi network, and opens the tunnel setup page at the IP address printed in the
+serial monitor. Existing values are filled in; stored passwords and private
+keys remain hidden and are retained when their fields are left empty.
+
+For a complete reset, leave the firmware running and hold **BOOT** for four
+seconds. Do not press RESET. This removes `/esp32tun.cfg`, the stored SSH
+private key, and restarts the open first-boot portal. These actions are enabled
+on GPIO 0 for the LOLIN S2 Mini and GPIO 9 for the ESP32-C3 reference target.
 
 ## Build, flash, and monitor
 

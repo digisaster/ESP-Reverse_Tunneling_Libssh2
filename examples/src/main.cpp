@@ -91,7 +91,7 @@ void setup() {
     return;
   }
 
-  if (!deviceConfig.setupComplete) {
+  if (!deviceConfig.setupComplete || wifi_provisioning::editRequested()) {
     status_led::set(status_led::State::Setup);
     if (!wifi_provisioning::startDeviceSetup(deviceConfig)) {
       status_led::set(status_led::State::Error);
