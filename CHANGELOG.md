@@ -12,6 +12,9 @@ This is the candidate baseline for `esp32tun` reference firmware
 
 ### Added
 
+- Added a minimal, non-blocking status LED for the ESP32-C3 reference profile.
+  It distinguishes missing configuration, active setup, connection attempts,
+  an established tunnel, and connection or authentication errors.
 - First-boot WiFi provisioning for the reference firmware. A temporary setup
   access point scans for networks, verifies the supplied credentials, writes
   `/esp32tun.cfg`, and restarts without activating the setup server again.

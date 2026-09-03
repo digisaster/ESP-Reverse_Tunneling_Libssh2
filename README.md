@@ -111,6 +111,27 @@ implementation, and test evidence are recorded in
 
 Do not publish LittleFS images or device backups containing credentials.
 
+## ESP32-C3 status LED
+
+The `esp32_c3_lowmem` reference profile uses the simple blue LED on GPIO 8 as
+an active-low status indicator. It uses no task, timer object, PWM, or dynamic
+allocation; a small `millis()`-driven state machine is updated by the existing
+firmware loop.
+
+| State | LED pattern |
+| --- | --- |
+| No valid configuration | Three short flashes once, followed by setup blinking |
+| Setup page active | 0.5 seconds on, 0.5 seconds off |
+| WiFi or SSH connection in progress | Two short flashes every 2 seconds |
+| Reverse tunnel connected | One short heartbeat every 3 seconds |
+| Connection or authentication error | Three short flashes every 2 seconds |
+
+GPIO 8 active-low matches the validated C3 hardware. Boards with an addressable
+RGB LED or a different LED connection must override
+`ESP32TUN_STATUS_LED_PIN` and `ESP32TUN_STATUS_LED_ACTIVE_LOW`, or set the pin
+to `-1` to compile the indicator out. Other reference environments keep it
+disabled by default.
+
 ## Connecting through the reverse tunnel
 
 The example binds its remote listener to `127.0.0.1`. This is intentional: the

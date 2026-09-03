@@ -1,4 +1,5 @@
 #include "ESP-Reverse_Tunneling_Libssh2.h"
+#include "status_led.h"
 #include "wifi_provisioning.h"
 #include <Arduino.h>
 #include <WiFi.h>
@@ -55,6 +56,7 @@ void onChannelClosed(int channel, ChannelCloseReason reason);
 void onTunnelError(int code, const char *detail);
 
 void setup() {
+  status_led::begin();
   Serial.begin(115200);
   const unsigned long serialWaitStarted = millis();
   while (!Serial && millis() - serialWaitStarted < 2000) {
@@ -69,24 +71,30 @@ void setup() {
 #endif
 
   if (!wifi_provisioning::begin(deviceConfig)) {
+    status_led::set(status_led::State::Error);
     LOG_E("MAIN", "Unable to load or create WiFi configuration");
     return;
   }
 
   if (wifi_provisioning::isActive()) {
+    status_led::set(status_led::State::MissingConfig);
     LOG_I("MAIN", "WiFi setup mode active; tunnel startup is paused");
     return;
   }
 
   // WiFi connection
+  status_led::set(status_led::State::Connecting);
   connectWiFi();
   if (WiFi.status() != WL_CONNECTED) {
+    status_led::set(status_led::State::Error);
     LOG_E("MAIN", "WiFi is unavailable; tunnel startup is paused");
     return;
   }
 
   if (!deviceConfig.setupComplete) {
+    status_led::set(status_led::State::Setup);
     if (!wifi_provisioning::startDeviceSetup(deviceConfig)) {
+      status_led::set(status_led::State::Error);
       LOG_E("MAIN", "Unable to start tunnel setup page");
     }
     return;
@@ -97,6 +105,7 @@ void setup() {
 
   // SSH tunnel initialization
   if (!tunnel.init()) {
+    status_led::set(status_led::State::Error);
     LOG_E("MAIN", "Failed to initialize SSH tunnel");
     return;
   }
@@ -104,6 +113,7 @@ void setup() {
 
   // Start SSH connection
   if (!tunnel.connectSSH()) {
+    status_led::set(status_led::State::Error);
     LOG_E("MAIN", "Failed to connect SSH tunnel");
   }
 
@@ -111,6 +121,7 @@ void setup() {
 }
 
 void loop() {
+  status_led::update();
   wifi_provisioning::pollConfigResetButton();
 
   if (wifi_provisioning::isActive()) {
@@ -140,13 +151,18 @@ void loop() {
 }
 
 void connectWiFi() {
+  status_led::set(status_led::State::Connecting);
   LOG_I("WIFI", "Connecting to WiFi...");
   WiFi.mode(WIFI_STA);
   WiFi.begin(deviceConfig.wifiSsid.c_str(), deviceConfig.wifiPassword.c_str());
 
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 30) {
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    const unsigned long waitStarted = millis();
+    while (millis() - waitStarted < 1000) {
+      status_led::update();
+      vTaskDelay(pdMS_TO_TICKS(20));
+    }
     Serial.print(".");
     attempts++;
   }
@@ -157,6 +173,7 @@ void connectWiFi() {
     LOGF_I("WIFI", "IP address: %s", WiFi.localIP().toString().c_str());
     LOGF_I("WIFI", "Signal strength: %d dBm", WiFi.RSSI());
   } else {
+    status_led::set(status_led::State::Error);
     LOG_E("WIFI", "Failed to connect to WiFi");
   }
 }
@@ -357,9 +374,15 @@ const char *closeReasonToString(ChannelCloseReason reason) {
   }
 }
 
-void onSessionConnected() { LOG_I("CALLBACK", "SSH session established"); }
+void onSessionConnected() {
+  status_led::set(status_led::State::Connected);
+  LOG_I("CALLBACK", "SSH session established");
+}
 
-void onSessionDisconnected() { LOG_I("CALLBACK", "SSH session disconnected"); }
+void onSessionDisconnected() {
+  status_led::set(status_led::State::Error);
+  LOG_I("CALLBACK", "SSH session disconnected");
+}
 
 void onChannelOpened(int channel) {
   LOGF_I("CALLBACK", "Channel %d opened", channel);
@@ -371,5 +394,6 @@ void onChannelClosed(int channel, ChannelCloseReason reason) {
 }
 
 void onTunnelError(int code, const char *detail) {
+  status_led::set(status_led::State::Error);
   LOGF_W("CALLBACK", "Tunnel error %d: %s", code, detail ? detail : "(none)");
 }
