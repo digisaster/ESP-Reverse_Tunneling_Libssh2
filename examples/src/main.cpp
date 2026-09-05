@@ -1,4 +1,5 @@
 #include "ESP-Reverse_Tunneling_Libssh2.h"
+#include "minis_registration.h"
 #include "status_led.h"
 #include "wifi_provisioning.h"
 #include <Arduino.h>
@@ -89,6 +90,12 @@ void setup() {
     status_led::set(status_led::State::Error);
     LOG_E("MAIN", "WiFi is unavailable; tunnel startup is paused");
     return;
+  }
+
+  // Minimal Minis bootstrap. Failure is deliberately non-fatal so remote
+  // tunnel startup keeps working even when the Minis endpoint is unavailable.
+  if (!minis_registration::registerClient()) {
+    LOG_W("MAIN", "Minis registration attempt did not complete");
   }
 
   if (!deviceConfig.setupComplete || wifi_provisioning::editRequested()) {
