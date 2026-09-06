@@ -23,14 +23,17 @@ constexpr uint16_t MIN_HEARTBEAT_INTERVAL_MIN = 5;
 constexpr uint16_t MAX_HEARTBEAT_INTERVAL_MIN = 1440;
 constexpr uint32_t INITIAL_CONFIG_DELAY_MS = 5000;
 constexpr uint32_t HEARTBEAT_TASK_STACK_BYTES = 6144;
-constexpr size_t CONFIG_BUFFER_SIZE = 384;
-constexpr uint32_t SUPPORTED_CONFIG_VERSION = 1;
+constexpr size_t CONFIG_BUFFER_SIZE = 768;
+constexpr size_t MAX_CONFIG_HOST_LENGTH = 253;
 
 TaskHandle_t heartbeatTaskHandle = nullptr;
 uint16_t heartbeatIntervalMin = DEFAULT_HEARTBEAT_INTERVAL_MIN;
-bool candidateConfigKnown = false;
-uint32_t candidateConfigRevision = 0;
+bool candidateTunnelKnown = false;
+bool candidateTunnelEnabled = false;
+String candidateRemoteBindHost;
 uint16_t candidateRemoteBindPort = 0;
+String candidateLocalHost;
+uint16_t candidateLocalPort = 0;
 
 enum class SettingResult { NotFound, Valid, Invalid };
 
@@ -38,15 +41,21 @@ struct ParsedConfig {
   bool heartbeatIntervalPresent = false;
   bool heartbeatIntervalValid = false;
   uint16_t heartbeatIntervalMin = 0;
-  bool versionPresent = false;
-  bool versionValid = false;
-  uint32_t version = 0;
-  bool revisionPresent = false;
-  bool revisionValid = false;
-  uint32_t revision = 0;
+  bool tunnelEnabledPresent = false;
+  bool tunnelEnabledValid = false;
+  bool tunnelEnabled = false;
+  bool remoteBindHostPresent = false;
+  bool remoteBindHostValid = false;
+  const char *remoteBindHost = nullptr;
   bool remoteBindPortPresent = false;
   bool remoteBindPortValid = false;
   uint16_t remoteBindPort = 0;
+  bool localHostPresent = false;
+  bool localHostValid = false;
+  const char *localHost = nullptr;
+  bool localPortPresent = false;
+  bool localPortValid = false;
+  uint16_t localPort = 0;
 };
 
 String buildSid() {
@@ -251,6 +260,92 @@ SettingResult parseSetting(const char *line, const char *key, uint32_t &value) {
                                             : SettingResult::Invalid;
 }
 
+SettingResult parseTextSetting(char *line, const char *key,
+                               const char *&value) {
+  const size_t keyLength = strlen(key);
+  if (strncmp(line, key, keyLength) != 0) {
+    return SettingResult::NotFound;
+  }
+
+  char *settingValue = line + keyLength;
+  while (*settingValue == ' ' || *settingValue == '\t') {
+    ++settingValue;
+  }
+  if (*settingValue != '=') {
+    return SettingResult::NotFound;
+  }
+
+  ++settingValue;
+  while (*settingValue == ' ' || *settingValue == '\t') {
+    ++settingValue;
+  }
+
+  char *end = settingValue + strlen(settingValue);
+  while (end > settingValue &&
+         (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r')) {
+    --end;
+  }
+  *end = '\0';
+  if (*settingValue == '\0') {
+    return SettingResult::Invalid;
+  }
+
+  value = settingValue;
+  return SettingResult::Valid;
+}
+
+bool equalsIgnoreCase(const char *left, const char *right) {
+  while (*left != '\0' && *right != '\0') {
+    char leftChar = *left;
+    char rightChar = *right;
+    if (leftChar >= 'A' && leftChar <= 'Z') {
+      leftChar = static_cast<char>(leftChar - 'A' + 'a');
+    }
+    if (rightChar >= 'A' && rightChar <= 'Z') {
+      rightChar = static_cast<char>(rightChar - 'A' + 'a');
+    }
+    if (leftChar != rightChar) {
+      return false;
+    }
+    ++left;
+    ++right;
+  }
+  return *left == '\0' && *right == '\0';
+}
+
+bool parseBoolean(const char *value, bool &parsed) {
+  if (strcmp(value, "1") == 0 || equalsIgnoreCase(value, "yes") ||
+      equalsIgnoreCase(value, "true") || equalsIgnoreCase(value, "on")) {
+    parsed = true;
+    return true;
+  }
+  if (strcmp(value, "0") == 0 || equalsIgnoreCase(value, "no") ||
+      equalsIgnoreCase(value, "false") || equalsIgnoreCase(value, "off")) {
+    parsed = false;
+    return true;
+  }
+  return false;
+}
+
+bool isValidConfigHost(const char *host) {
+  const size_t length = strlen(host);
+  if (length == 0 || length > MAX_CONFIG_HOST_LENGTH) {
+    return false;
+  }
+
+  for (size_t i = 0; i < length; ++i) {
+    const char value = host[i];
+    const bool alphaNumeric =
+        (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+        (value >= '0' && value <= '9');
+    if (!alphaNumeric && value != '.' && value != '-' && value != ':' &&
+        value != '[' && value != ']') {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool parseConfig(char *config, ParsedConfig &parsed) {
   char *line = config;
   bool structurallyValid = true;
@@ -282,29 +377,29 @@ bool parseConfig(char *config, ParsedConfig &parsed) {
         }
       }
 
-      value = 0;
-      result = parseSetting(line, "CFG_VERSION", value);
+      const char *textValue = nullptr;
+      result = parseTextSetting(line, "TUNNEL_ENABLED", textValue);
       if (result != SettingResult::NotFound) {
-        if (parsed.versionPresent) {
+        if (parsed.tunnelEnabledPresent) {
           structurallyValid = false;
         }
-        parsed.versionPresent = true;
-        parsed.versionValid = result == SettingResult::Valid;
-        if (parsed.versionValid) {
-          parsed.version = value;
-        }
+        parsed.tunnelEnabledPresent = true;
+        parsed.tunnelEnabledValid =
+            result == SettingResult::Valid &&
+            parseBoolean(textValue, parsed.tunnelEnabled);
       }
 
-      value = 0;
-      result = parseSetting(line, "CFG_REVISION", value);
+      textValue = nullptr;
+      result = parseTextSetting(line, "REMOTE_BIND_HOST", textValue);
       if (result != SettingResult::NotFound) {
-        if (parsed.revisionPresent) {
+        if (parsed.remoteBindHostPresent) {
           structurallyValid = false;
         }
-        parsed.revisionPresent = true;
-        parsed.revisionValid = result == SettingResult::Valid && value > 0;
-        if (parsed.revisionValid) {
-          parsed.revision = value;
+        parsed.remoteBindHostPresent = true;
+        parsed.remoteBindHostValid =
+            result == SettingResult::Valid && isValidConfigHost(textValue);
+        if (parsed.remoteBindHostValid) {
+          parsed.remoteBindHost = textValue;
         }
       }
 
@@ -321,6 +416,34 @@ bool parseConfig(char *config, ParsedConfig &parsed) {
           parsed.remoteBindPort = static_cast<uint16_t>(value);
         }
       }
+
+      textValue = nullptr;
+      result = parseTextSetting(line, "LOCAL_HOST", textValue);
+      if (result != SettingResult::NotFound) {
+        if (parsed.localHostPresent) {
+          structurallyValid = false;
+        }
+        parsed.localHostPresent = true;
+        parsed.localHostValid =
+            result == SettingResult::Valid && isValidConfigHost(textValue);
+        if (parsed.localHostValid) {
+          parsed.localHost = textValue;
+        }
+      }
+
+      value = 0;
+      result = parseSetting(line, "LOCAL_PORT", value);
+      if (result != SettingResult::NotFound) {
+        if (parsed.localPortPresent) {
+          structurallyValid = false;
+        }
+        parsed.localPortPresent = true;
+        parsed.localPortValid =
+            result == SettingResult::Valid && value >= 1 && value <= 65535;
+        if (parsed.localPortValid) {
+          parsed.localPort = static_cast<uint16_t>(value);
+        }
+      }
     }
 
     if (nextLine == nullptr) {
@@ -332,52 +455,50 @@ bool parseConfig(char *config, ParsedConfig &parsed) {
 }
 
 void processCandidateConfig(const ParsedConfig &parsed) {
-  const bool anyCandidateField = parsed.versionPresent ||
-                                 parsed.revisionPresent ||
-                                 parsed.remoteBindPortPresent;
+  const bool anyCandidateField =
+      parsed.tunnelEnabledPresent || parsed.remoteBindHostPresent ||
+      parsed.remoteBindPortPresent || parsed.localHostPresent ||
+      parsed.localPortPresent;
   if (!anyCandidateField) {
     return;
   }
 
-  if (!parsed.versionPresent || !parsed.revisionPresent ||
-      !parsed.remoteBindPortPresent || !parsed.versionValid ||
-      !parsed.revisionValid || !parsed.remoteBindPortValid) {
-    LOG_W("MINIS", "Remote config candidate is incomplete or invalid");
+  if (!parsed.tunnelEnabledPresent || !parsed.remoteBindHostPresent ||
+      !parsed.remoteBindPortPresent || !parsed.localHostPresent ||
+      !parsed.localPortPresent || !parsed.tunnelEnabledValid ||
+      !parsed.remoteBindHostValid || !parsed.remoteBindPortValid ||
+      !parsed.localHostValid || !parsed.localPortValid) {
+    LOG_W("MINIS", "Tunnel config candidate is incomplete or invalid");
     return;
   }
 
-  if (parsed.version != SUPPORTED_CONFIG_VERSION) {
-    LOGF_W("MINIS", "Unsupported CFG_VERSION: %lu",
-           static_cast<unsigned long>(parsed.version));
+  const bool changed =
+      !candidateTunnelKnown ||
+      parsed.tunnelEnabled != candidateTunnelEnabled ||
+      candidateRemoteBindHost != parsed.remoteBindHost ||
+      parsed.remoteBindPort != candidateRemoteBindPort ||
+      candidateLocalHost != parsed.localHost ||
+      parsed.localPort != candidateLocalPort;
+  if (!changed) {
+    LOG_I("MINIS", "Tunnel config candidate unchanged");
     return;
   }
 
-  if (!candidateConfigKnown || parsed.revision > candidateConfigRevision) {
-    candidateConfigKnown = true;
-    candidateConfigRevision = parsed.revision;
-    candidateRemoteBindPort = parsed.remoteBindPort;
-    LOGF_I("MINIS",
-           "Candidate cfg revision %lu: REMOTE_BIND_PORT=%u (not active)",
-           static_cast<unsigned long>(candidateConfigRevision),
-           static_cast<unsigned int>(candidateRemoteBindPort));
-    return;
-  }
+  candidateTunnelKnown = true;
+  candidateTunnelEnabled = parsed.tunnelEnabled;
+  candidateRemoteBindHost = parsed.remoteBindHost;
+  candidateRemoteBindPort = parsed.remoteBindPort;
+  candidateLocalHost = parsed.localHost;
+  candidateLocalPort = parsed.localPort;
 
-  if (parsed.revision < candidateConfigRevision) {
-    LOGF_W("MINIS", "Stale CFG_REVISION %lu ignored; candidate is %lu",
-           static_cast<unsigned long>(parsed.revision),
-           static_cast<unsigned long>(candidateConfigRevision));
-    return;
-  }
-
-  if (parsed.remoteBindPort != candidateRemoteBindPort) {
-    LOGF_W("MINIS", "CFG_REVISION %lu changed without revision increment",
-           static_cast<unsigned long>(parsed.revision));
-    return;
-  }
-
-  LOGF_I("MINIS", "Candidate cfg revision %lu unchanged",
-         static_cast<unsigned long>(candidateConfigRevision));
+  LOGF_I("MINIS",
+         "Tunnel candidate changed (not active): enabled=%s "
+         "remote=%s:%u local=%s:%u",
+         candidateTunnelEnabled ? "yes" : "no",
+         candidateRemoteBindHost.c_str(),
+         static_cast<unsigned int>(candidateRemoteBindPort),
+         candidateLocalHost.c_str(),
+         static_cast<unsigned int>(candidateLocalPort));
 }
 
 void refreshConfig() {
