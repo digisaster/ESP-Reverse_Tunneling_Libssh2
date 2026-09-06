@@ -1,6 +1,7 @@
 #include "minis_registration.h"
 
 #include "ESP-Reverse_Tunneling_Libssh2.h"
+#include <LittleFS.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <esp_random.h>
@@ -25,11 +26,17 @@ constexpr uint32_t INITIAL_CONFIG_DELAY_MS = 5000;
 constexpr uint32_t HEARTBEAT_TASK_STACK_BYTES = 6144;
 constexpr size_t CONFIG_BUFFER_SIZE = 768;
 constexpr size_t MAX_CONFIG_HOST_LENGTH = 253;
+constexpr const char *CACHED_CONFIG_PATH = "/minis.cfg";
+constexpr const char *CACHED_CONFIG_TEMP_PATH = "/minis.cfg.tmp";
+constexpr const char *CACHED_CONFIG_BACKUP_PATH = "/minis.cfg.bak";
 
 TaskHandle_t heartbeatTaskHandle = nullptr;
 uint16_t heartbeatIntervalMin = DEFAULT_HEARTBEAT_INTERVAL_MIN;
 bool candidateTunnelKnown = false;
+uint16_t candidateHeartbeatIntervalMin = DEFAULT_HEARTBEAT_INTERVAL_MIN;
 bool candidateTunnelEnabled = false;
+String candidateSshHost;
+uint16_t candidateSshPort = 0;
 String candidateRemoteBindHost;
 uint16_t candidateRemoteBindPort = 0;
 String candidateLocalHost;
@@ -44,6 +51,12 @@ struct ParsedConfig {
   bool tunnelEnabledPresent = false;
   bool tunnelEnabledValid = false;
   bool tunnelEnabled = false;
+  bool sshHostPresent = false;
+  bool sshHostValid = false;
+  const char *sshHost = nullptr;
+  bool sshPortPresent = false;
+  bool sshPortValid = false;
+  uint16_t sshPort = 0;
   bool remoteBindHostPresent = false;
   bool remoteBindHostValid = false;
   const char *remoteBindHost = nullptr;
@@ -63,7 +76,7 @@ String buildSid() {
   const uint32_t shortId = static_cast<uint32_t>(chipId & 0xFFFFFFFFULL);
 
   char buffer[9] = {0};
-  snprintf(buffer, sizeof(buffer), "%08X", static_cast<unsigned int>(shortId));
+  snprintf(buffer, sizeof(buffer), "%08x", static_cast<unsigned int>(shortId));
   return String(buffer);
 }
 
@@ -390,6 +403,34 @@ bool parseConfig(char *config, ParsedConfig &parsed) {
       }
 
       textValue = nullptr;
+      result = parseTextSetting(line, "SSH_HOST", textValue);
+      if (result != SettingResult::NotFound) {
+        if (parsed.sshHostPresent) {
+          structurallyValid = false;
+        }
+        parsed.sshHostPresent = true;
+        parsed.sshHostValid =
+            result == SettingResult::Valid && isValidConfigHost(textValue);
+        if (parsed.sshHostValid) {
+          parsed.sshHost = textValue;
+        }
+      }
+
+      value = 0;
+      result = parseSetting(line, "SSH_PORT", value);
+      if (result != SettingResult::NotFound) {
+        if (parsed.sshPortPresent) {
+          structurallyValid = false;
+        }
+        parsed.sshPortPresent = true;
+        parsed.sshPortValid =
+            result == SettingResult::Valid && value >= 1 && value <= 65535;
+        if (parsed.sshPortValid) {
+          parsed.sshPort = static_cast<uint16_t>(value);
+        }
+      }
+
+      textValue = nullptr;
       result = parseTextSetting(line, "REMOTE_BIND_HOST", textValue);
       if (result != SettingResult::NotFound) {
         if (parsed.remoteBindHostPresent) {
@@ -454,51 +495,155 @@ bool parseConfig(char *config, ParsedConfig &parsed) {
   return structurallyValid;
 }
 
-void processCandidateConfig(const ParsedConfig &parsed) {
+bool hasCompleteTunnelConfig(const ParsedConfig &parsed) {
+  return parsed.tunnelEnabledPresent && parsed.sshHostPresent &&
+         parsed.sshPortPresent && parsed.remoteBindHostPresent &&
+         parsed.remoteBindPortPresent && parsed.localHostPresent &&
+         parsed.localPortPresent && parsed.tunnelEnabledValid &&
+         parsed.sshHostValid && parsed.sshPortValid &&
+         parsed.remoteBindHostValid && parsed.remoteBindPortValid &&
+         parsed.localHostValid && parsed.localPortValid;
+}
+
+bool writeCachedConfig(const ParsedConfig &parsed) {
+  LittleFS.remove(CACHED_CONFIG_TEMP_PATH);
+  File file = LittleFS.open(CACHED_CONFIG_TEMP_PATH, "w");
+  if (!file) {
+    return false;
+  }
+
+  file.println(F("HB_DEBUG=0"));
+  file.println(F("HB_EXEC=no"));
+  file.print(F("HB_INTERVAL_MIN="));
+  file.println(parsed.heartbeatIntervalMin);
+  file.println();
+  file.print(F("TUNNEL_ENABLED="));
+  file.println(parsed.tunnelEnabled ? F("yes") : F("no"));
+  file.print(F("SSH_HOST="));
+  file.println(parsed.sshHost);
+  file.print(F("SSH_PORT="));
+  file.println(parsed.sshPort);
+  file.print(F("REMOTE_BIND_HOST="));
+  file.println(parsed.remoteBindHost);
+  file.print(F("REMOTE_BIND_PORT="));
+  file.println(parsed.remoteBindPort);
+  file.print(F("LOCAL_HOST="));
+  file.println(parsed.localHost);
+  file.print(F("LOCAL_PORT="));
+  file.println(parsed.localPort);
+  file.flush();
+  file.close();
+
+  LittleFS.remove(CACHED_CONFIG_BACKUP_PATH);
+  const bool hadExistingConfig = LittleFS.exists(CACHED_CONFIG_PATH);
+  if (hadExistingConfig &&
+      !LittleFS.rename(CACHED_CONFIG_PATH, CACHED_CONFIG_BACKUP_PATH)) {
+    LittleFS.remove(CACHED_CONFIG_TEMP_PATH);
+    return false;
+  }
+
+  if (!LittleFS.rename(CACHED_CONFIG_TEMP_PATH, CACHED_CONFIG_PATH)) {
+    if (hadExistingConfig) {
+      LittleFS.rename(CACHED_CONFIG_BACKUP_PATH, CACHED_CONFIG_PATH);
+    }
+    LittleFS.remove(CACHED_CONFIG_TEMP_PATH);
+    return false;
+  }
+
+  LittleFS.remove(CACHED_CONFIG_BACKUP_PATH);
+  return true;
+}
+
+bool processCandidateConfig(const ParsedConfig &parsed, bool persist) {
   const bool anyCandidateField =
-      parsed.tunnelEnabledPresent || parsed.remoteBindHostPresent ||
+      parsed.tunnelEnabledPresent || parsed.sshHostPresent ||
+      parsed.sshPortPresent || parsed.remoteBindHostPresent ||
       parsed.remoteBindPortPresent || parsed.localHostPresent ||
       parsed.localPortPresent;
   if (!anyCandidateField) {
-    return;
+    return false;
   }
 
-  if (!parsed.tunnelEnabledPresent || !parsed.remoteBindHostPresent ||
-      !parsed.remoteBindPortPresent || !parsed.localHostPresent ||
-      !parsed.localPortPresent || !parsed.tunnelEnabledValid ||
-      !parsed.remoteBindHostValid || !parsed.remoteBindPortValid ||
-      !parsed.localHostValid || !parsed.localPortValid) {
+  if (!hasCompleteTunnelConfig(parsed)) {
     LOG_W("MINIS", "Tunnel config candidate is incomplete or invalid");
-    return;
+    return false;
   }
 
   const bool changed =
       !candidateTunnelKnown ||
+      parsed.heartbeatIntervalMin != candidateHeartbeatIntervalMin ||
       parsed.tunnelEnabled != candidateTunnelEnabled ||
+      candidateSshHost != parsed.sshHost || parsed.sshPort != candidateSshPort ||
       candidateRemoteBindHost != parsed.remoteBindHost ||
       parsed.remoteBindPort != candidateRemoteBindPort ||
       candidateLocalHost != parsed.localHost ||
       parsed.localPort != candidateLocalPort;
   if (!changed) {
-    LOG_I("MINIS", "Tunnel config candidate unchanged");
-    return;
+    LOG_I("MINIS", "Minis config candidate unchanged");
+    return true;
+  }
+
+  if (persist && !writeCachedConfig(parsed)) {
+    LOG_W("MINIS", "Unable to store tunnel config candidate");
+    return false;
   }
 
   candidateTunnelKnown = true;
+  candidateHeartbeatIntervalMin = parsed.heartbeatIntervalMin;
   candidateTunnelEnabled = parsed.tunnelEnabled;
+  candidateSshHost = parsed.sshHost;
+  candidateSshPort = parsed.sshPort;
   candidateRemoteBindHost = parsed.remoteBindHost;
   candidateRemoteBindPort = parsed.remoteBindPort;
   candidateLocalHost = parsed.localHost;
   candidateLocalPort = parsed.localPort;
 
   LOGF_I("MINIS",
-         "Tunnel candidate changed (not active): enabled=%s "
+         "%s tunnel config (not active): enabled=%s ssh=%s@%s:%u "
          "remote=%s:%u local=%s:%u",
-         candidateTunnelEnabled ? "yes" : "no",
+         persist ? "Stored" : "Cached", candidateTunnelEnabled ? "yes" : "no",
+         sid().c_str(), candidateSshHost.c_str(),
+         static_cast<unsigned int>(candidateSshPort),
          candidateRemoteBindHost.c_str(),
          static_cast<unsigned int>(candidateRemoteBindPort),
          candidateLocalHost.c_str(),
          static_cast<unsigned int>(candidateLocalPort));
+  LOG_I("MINIS", "SSH credentials: key required, not remotely provisioned");
+  return true;
+}
+
+void loadCachedConfig() {
+  File file = LittleFS.open(CACHED_CONFIG_PATH, "r");
+  if (!file) {
+    LOG_I("MINIS", "No cached Minis config found");
+    return;
+  }
+
+  const size_t size = file.size();
+  if (size == 0 || size >= CONFIG_BUFFER_SIZE) {
+    file.close();
+    LOG_W("MINIS", "Cached Minis config has an invalid size");
+    return;
+  }
+
+  char config[CONFIG_BUFFER_SIZE] = {0};
+  const size_t read = file.readBytes(config, size);
+  file.close();
+  if (read != size) {
+    LOG_W("MINIS", "Unable to read cached Minis config");
+    return;
+  }
+  config[read] = '\0';
+
+  ParsedConfig parsed;
+  if (!parseConfig(config, parsed) || !parsed.heartbeatIntervalPresent ||
+      !parsed.heartbeatIntervalValid || !hasCompleteTunnelConfig(parsed)) {
+    LOG_W("MINIS", "Cached Minis config is invalid");
+    return;
+  }
+
+  heartbeatIntervalMin = parsed.heartbeatIntervalMin;
+  processCandidateConfig(parsed, false);
 }
 
 void refreshConfig() {
@@ -526,7 +671,10 @@ void refreshConfig() {
   if (!parsed.heartbeatIntervalPresent || !parsed.heartbeatIntervalValid) {
     LOGF_W("MINIS", "cfg.txt has no valid HB_INTERVAL_MIN; keeping %u min",
            static_cast<unsigned int>(heartbeatIntervalMin));
-  } else if (parsed.heartbeatIntervalMin != heartbeatIntervalMin) {
+    return;
+  }
+
+  if (parsed.heartbeatIntervalMin != heartbeatIntervalMin) {
     LOGF_I("MINIS", "HB_INTERVAL_MIN changed: %u -> %u",
            static_cast<unsigned int>(heartbeatIntervalMin),
            static_cast<unsigned int>(parsed.heartbeatIntervalMin));
@@ -536,7 +684,7 @@ void refreshConfig() {
            static_cast<unsigned int>(heartbeatIntervalMin));
   }
 
-  processCandidateConfig(parsed);
+  processCandidateConfig(parsed, true);
 }
 
 uint32_t nextHeartbeatDelaySeconds() {
@@ -547,6 +695,7 @@ uint32_t nextHeartbeatDelaySeconds() {
 }
 
 void heartbeatTask(void *) {
+  loadCachedConfig();
   vTaskDelay(pdMS_TO_TICKS(INITIAL_CONFIG_DELAY_MS));
   refreshConfig();
 
