@@ -24,9 +24,30 @@ constexpr uint16_t MAX_HEARTBEAT_INTERVAL_MIN = 1440;
 constexpr uint32_t INITIAL_CONFIG_DELAY_MS = 5000;
 constexpr uint32_t HEARTBEAT_TASK_STACK_BYTES = 6144;
 constexpr size_t CONFIG_BUFFER_SIZE = 384;
+constexpr uint32_t SUPPORTED_CONFIG_VERSION = 1;
 
 TaskHandle_t heartbeatTaskHandle = nullptr;
 uint16_t heartbeatIntervalMin = DEFAULT_HEARTBEAT_INTERVAL_MIN;
+bool candidateConfigKnown = false;
+uint32_t candidateConfigRevision = 0;
+uint16_t candidateRemoteBindPort = 0;
+
+enum class SettingResult { NotFound, Valid, Invalid };
+
+struct ParsedConfig {
+  bool heartbeatIntervalPresent = false;
+  bool heartbeatIntervalValid = false;
+  uint16_t heartbeatIntervalMin = 0;
+  bool versionPresent = false;
+  bool versionValid = false;
+  uint32_t version = 0;
+  bool revisionPresent = false;
+  bool revisionValid = false;
+  uint32_t revision = 0;
+  bool remoteBindPortPresent = false;
+  bool remoteBindPortValid = false;
+  uint16_t remoteBindPort = 0;
+};
 
 String buildSid() {
   const uint64_t chipId = ESP.getEfuseMac();
@@ -208,9 +229,31 @@ bool sendHeartbeat(bool bootstrap) {
   return false;
 }
 
-bool parseHeartbeatInterval(char *config, uint16_t &intervalMin) {
-  constexpr char KEY[] = "HB_INTERVAL_MIN";
+SettingResult parseSetting(const char *line, const char *key, uint32_t &value) {
+  const size_t keyLength = strlen(key);
+  if (strncmp(line, key, keyLength) != 0) {
+    return SettingResult::NotFound;
+  }
+
+  const char *settingValue = line + keyLength;
+  while (*settingValue == ' ' || *settingValue == '\t') {
+    ++settingValue;
+  }
+  if (*settingValue != '=') {
+    return SettingResult::NotFound;
+  }
+
+  ++settingValue;
+  while (*settingValue == ' ' || *settingValue == '\t') {
+    ++settingValue;
+  }
+  return parseUnsigned(settingValue, value) ? SettingResult::Valid
+                                            : SettingResult::Invalid;
+}
+
+bool parseConfig(char *config, ParsedConfig &parsed) {
   char *line = config;
+  bool structurallyValid = true;
 
   while (*line != '\0') {
     char *nextLine = strchr(line, '\n');
@@ -221,25 +264,62 @@ bool parseHeartbeatInterval(char *config, uint16_t &intervalMin) {
     while (*line == ' ' || *line == '\t' || *line == '\r') {
       ++line;
     }
-    if (*line != '#' && strncmp(line, KEY, sizeof(KEY) - 1) == 0) {
-      char *value = line + sizeof(KEY) - 1;
-      while (*value == ' ' || *value == '\t') {
-        ++value;
-      }
-      if (*value == '=') {
-        ++value;
-        while (*value == ' ' || *value == '\t') {
-          ++value;
-        }
 
-        uint32_t parsed = 0;
-        if (parseUnsigned(value, parsed) &&
-            parsed >= MIN_HEARTBEAT_INTERVAL_MIN &&
-            parsed <= MAX_HEARTBEAT_INTERVAL_MIN) {
-          intervalMin = static_cast<uint16_t>(parsed);
-          return true;
+    if (*line != '#' && *line != '\0') {
+      uint32_t value = 0;
+      SettingResult result = parseSetting(line, "HB_INTERVAL_MIN", value);
+      if (result != SettingResult::NotFound) {
+        if (parsed.heartbeatIntervalPresent) {
+          structurallyValid = false;
         }
-        return false;
+        parsed.heartbeatIntervalPresent = true;
+        parsed.heartbeatIntervalValid =
+            result == SettingResult::Valid &&
+            value >= MIN_HEARTBEAT_INTERVAL_MIN &&
+            value <= MAX_HEARTBEAT_INTERVAL_MIN;
+        if (parsed.heartbeatIntervalValid) {
+          parsed.heartbeatIntervalMin = static_cast<uint16_t>(value);
+        }
+      }
+
+      value = 0;
+      result = parseSetting(line, "CFG_VERSION", value);
+      if (result != SettingResult::NotFound) {
+        if (parsed.versionPresent) {
+          structurallyValid = false;
+        }
+        parsed.versionPresent = true;
+        parsed.versionValid = result == SettingResult::Valid;
+        if (parsed.versionValid) {
+          parsed.version = value;
+        }
+      }
+
+      value = 0;
+      result = parseSetting(line, "CFG_REVISION", value);
+      if (result != SettingResult::NotFound) {
+        if (parsed.revisionPresent) {
+          structurallyValid = false;
+        }
+        parsed.revisionPresent = true;
+        parsed.revisionValid = result == SettingResult::Valid && value > 0;
+        if (parsed.revisionValid) {
+          parsed.revision = value;
+        }
+      }
+
+      value = 0;
+      result = parseSetting(line, "REMOTE_BIND_PORT", value);
+      if (result != SettingResult::NotFound) {
+        if (parsed.remoteBindPortPresent) {
+          structurallyValid = false;
+        }
+        parsed.remoteBindPortPresent = true;
+        parsed.remoteBindPortValid =
+            result == SettingResult::Valid && value >= 1 && value <= 65535;
+        if (parsed.remoteBindPortValid) {
+          parsed.remoteBindPort = static_cast<uint16_t>(value);
+        }
       }
     }
 
@@ -248,7 +328,56 @@ bool parseHeartbeatInterval(char *config, uint16_t &intervalMin) {
     }
     line = nextLine + 1;
   }
-  return false;
+  return structurallyValid;
+}
+
+void processCandidateConfig(const ParsedConfig &parsed) {
+  const bool anyCandidateField = parsed.versionPresent ||
+                                 parsed.revisionPresent ||
+                                 parsed.remoteBindPortPresent;
+  if (!anyCandidateField) {
+    return;
+  }
+
+  if (!parsed.versionPresent || !parsed.revisionPresent ||
+      !parsed.remoteBindPortPresent || !parsed.versionValid ||
+      !parsed.revisionValid || !parsed.remoteBindPortValid) {
+    LOG_W("MINIS", "Remote config candidate is incomplete or invalid");
+    return;
+  }
+
+  if (parsed.version != SUPPORTED_CONFIG_VERSION) {
+    LOGF_W("MINIS", "Unsupported CFG_VERSION: %lu",
+           static_cast<unsigned long>(parsed.version));
+    return;
+  }
+
+  if (!candidateConfigKnown || parsed.revision > candidateConfigRevision) {
+    candidateConfigKnown = true;
+    candidateConfigRevision = parsed.revision;
+    candidateRemoteBindPort = parsed.remoteBindPort;
+    LOGF_I("MINIS",
+           "Candidate cfg revision %lu: REMOTE_BIND_PORT=%u (not active)",
+           static_cast<unsigned long>(candidateConfigRevision),
+           static_cast<unsigned int>(candidateRemoteBindPort));
+    return;
+  }
+
+  if (parsed.revision < candidateConfigRevision) {
+    LOGF_W("MINIS", "Stale CFG_REVISION %lu ignored; candidate is %lu",
+           static_cast<unsigned long>(parsed.revision),
+           static_cast<unsigned long>(candidateConfigRevision));
+    return;
+  }
+
+  if (parsed.remoteBindPort != candidateRemoteBindPort) {
+    LOGF_W("MINIS", "CFG_REVISION %lu changed without revision increment",
+           static_cast<unsigned long>(parsed.revision));
+    return;
+  }
+
+  LOGF_I("MINIS", "Candidate cfg revision %lu unchanged",
+         static_cast<unsigned long>(candidateConfigRevision));
 }
 
 void refreshConfig() {
@@ -267,23 +396,26 @@ void refreshConfig() {
     return;
   }
 
-  uint16_t configuredInterval = 0;
-  if (configLength == 0 ||
-      !parseHeartbeatInterval(config, configuredInterval)) {
-    LOGF_W("MINIS", "cfg.txt has no valid HB_INTERVAL_MIN; keeping %u min",
-           static_cast<unsigned int>(heartbeatIntervalMin));
+  ParsedConfig parsed;
+  if (configLength == 0 || !parseConfig(config, parsed)) {
+    LOG_W("MINIS", "cfg.txt contains duplicate or malformed settings");
     return;
   }
 
-  if (configuredInterval != heartbeatIntervalMin) {
+  if (!parsed.heartbeatIntervalPresent || !parsed.heartbeatIntervalValid) {
+    LOGF_W("MINIS", "cfg.txt has no valid HB_INTERVAL_MIN; keeping %u min",
+           static_cast<unsigned int>(heartbeatIntervalMin));
+  } else if (parsed.heartbeatIntervalMin != heartbeatIntervalMin) {
     LOGF_I("MINIS", "HB_INTERVAL_MIN changed: %u -> %u",
            static_cast<unsigned int>(heartbeatIntervalMin),
-           static_cast<unsigned int>(configuredInterval));
-    heartbeatIntervalMin = configuredInterval;
+           static_cast<unsigned int>(parsed.heartbeatIntervalMin));
+    heartbeatIntervalMin = parsed.heartbeatIntervalMin;
   } else {
     LOGF_I("MINIS", "HB_INTERVAL_MIN: %u",
            static_cast<unsigned int>(heartbeatIntervalMin));
   }
+
+  processCandidateConfig(parsed);
 }
 
 uint32_t nextHeartbeatDelaySeconds() {
