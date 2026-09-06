@@ -97,6 +97,9 @@ void setup() {
   if (!minis_registration::registerClient()) {
     LOG_W("MAIN", "Minis registration attempt did not complete");
   }
+  if (!minis_registration::startHeartbeatTask()) {
+    LOG_W("MAIN", "Minis heartbeat service could not be started");
+  }
 
   if (!deviceConfig.setupComplete || wifi_provisioning::editRequested()) {
     status_led::set(status_led::State::Setup);
