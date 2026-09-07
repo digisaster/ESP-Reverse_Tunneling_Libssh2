@@ -67,21 +67,21 @@ globalSSHConfig.setTunnelConfig(
 
 | Format | Compatibility | Recommendation |
 |--------|---------------|----------------|
-| Modern OpenSSH (`-----BEGIN OPENSSH PRIVATE KEY-----`) | ⚠️ Variable | Convert to PKCS#8 |
-| PKCS#8 (`-----BEGIN PRIVATE KEY-----`) | ✅ Excellent | **Recommended** |
-| PEM RSA (`-----BEGIN RSA PRIVATE KEY-----`) | ✅ Excellent | OK for RSA |
-| PEM EC (`-----BEGIN EC PRIVATE KEY-----`) | ✅ Good | OK for ECDSA |
+| Modern OpenSSH (`-----BEGIN OPENSSH PRIVATE KEY-----`) | 🧪 Not validated | Convert to a tested PEM format |
+| PKCS#8 (`-----BEGIN PRIVATE KEY-----`) | 🧪 Not validated | Test before deployment |
+| PEM RSA (`-----BEGIN RSA PRIVATE KEY-----`) | ✅ Hardware validated | Public-key line optional |
+| PEM EC (`-----BEGIN EC PRIVATE KEY-----`) | ✅ P-256 validated | Matching public-key line required |
 
 ## 🔐 Supported Key Algorithms
 
 | Algorithm | Support | Recommended Size |
 |-----------|---------|------------------|
-| **Ed25519** | ✅ Excellent | 256 bits (fixed) |
-| RSA | ✅ Excellent | 4096 bits |
-| ECDSA P-256 | ✅ Good | 256 bits |
-| ECDSA P-384 | ✅ Good | 384 bits |
-| ECDSA P-521 | ✅ Good | 521 bits |
-| DSA | ⚠️ Deprecated | Not recommended |
+| **Ed25519** | ❌ Not compiled in mbedTLS backend | — |
+| RSA | ✅ Hardware validated | 2048 bits tested |
+| ECDSA P-256 | ✅ Hardware validated | 256 bits |
+| ECDSA P-384 | 🧪 Not hardware-tested | 384 bits |
+| ECDSA P-521 | 🧪 Not hardware-tested | 521 bits |
+| DSA | ❌ Not supported | — |
 
 ## 🛡️ Security Levels
 
@@ -183,7 +183,7 @@ globalSSHConfig.diagnoseSSHKeys();
 ## 📈 Performance Optimizations
 
 ### Memory
-- Use Ed25519 keys (more compact)
+- Use the hardware-validated ECDSA P-256 key pair for compact credentials
 - Adjust `bufferSize` according to usage
 - Limit `maxChannels` to what you need
 

@@ -850,10 +850,15 @@ bool SSHSession::authenticate(const SSHServerConfig &sshConfig) {
              attempt + 1, 3, passphraseNames[attempt], auth_result, detail);
     }
 
-    LOG_W(
-        "SSH",
-        "Note: Your private key may be in OpenSSH format. "
-        "Consider converting to PEM format: ssh-keygen -p -m PEM -f your_key");
+    if (sshConfig.publicKeyData.isEmpty()) {
+      LOG_W("SSH",
+            "If this is a non-RSA key, supply its matching OpenSSH "
+            "public-key line");
+    } else {
+      LOG_W("SSH",
+            "Public-key authentication failed; verify the username, "
+            "authorized_keys entry, and matching key pair");
+    }
     return false;
 
   } else {

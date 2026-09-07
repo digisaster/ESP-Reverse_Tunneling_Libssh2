@@ -20,6 +20,8 @@ This is the candidate baseline for `esp32tun` reference firmware
   `/esp32tun.cfg`, and restarts without activating the setup server again.
 - Two-phase provisioning now configures password or private-key SSH
   authentication and one reverse tunnel without editing source files.
+- The tunnel setup page can store a matching OpenSSH public-key line. This is
+  required for ECDSA authentication and remains optional for RSA-PEM keys.
 - Holding the board's BOOT button for four seconds during normal operation
   clears the stored provisioning data and restarts the setup portal.
 - Dedicated native regression coverage for configured channel inactivity,
@@ -53,6 +55,8 @@ This is the candidate baseline for `esp32tun` reference firmware
   live SSH channel.
 - Heap warnings now account for the requested allocation and a small operating
   reserve instead of treating every healthy sub-50-KB ESP32-C3 heap as low.
+- Public-key failures now report actionable key-pair and `authorized_keys`
+  checks instead of always suggesting an OpenSSH-to-PEM conversion.
 
 ### Validated
 
@@ -66,8 +70,13 @@ This is the candidate baseline for `esp32tun` reference firmware
   repeated channel close and reopen, 30-second keepalive messages, zero dropped
   bytes, and heap recovery after channel closure.
 - ESP32-C3 hardware testing confirmed unencrypted RSA-PEM private-key
-  authentication and reverse-listener creation. Modern key formats remain a
-  separate compatibility test phase.
+  authentication and reverse-listener creation.
+- ESP32-C3 hardware testing confirmed ECDSA P-256 authentication using a
+  226-byte EC-PEM private key and matching OpenSSH public-key line. The SSH
+  session authenticated on its first attempt, created the reverse listener,
+  and reached the connected state after a device reset. Ed25519 client keys
+  remain unsupported by the pinned mbedTLS backend; ECDSA P-384 and P-521 have
+  not yet been hardware-tested.
 
 ### Documentation
 

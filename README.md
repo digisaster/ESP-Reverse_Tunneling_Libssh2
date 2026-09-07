@@ -5,8 +5,10 @@ Arduino library for creating reverse SSH tunnels from an ESP32 with libssh2.
 **Release status:** the no-code `esp32tun` reference firmware is a
 **1.0.0-beta.1 candidate**. WiFi provisioning, tunnel provisioning, password
 authentication, and RSA-PEM private-key authentication have been validated on
-the ESP32-C3 low-memory target. Modern private-key formats and host-key
-verification are not part of this beta baseline yet.
+the ESP32-C3 low-memory target. ECDSA P-256 authentication is also validated
+when both the EC-PEM private key and matching OpenSSH public-key line are
+provided. Ed25519 client keys and host-key verification are not part of this
+beta baseline.
 
 The current reference target is a WEMOS LOLIN S2 Mini. It has been tested with
 Wi-Fi, password authentication, a reverse SSH listener, an interactive SSH
@@ -38,13 +40,14 @@ open setup network closes. Reconnect to the selected network and follow the
 displayed link to the temporary tunnel setup page.
 
 The second page configures the SSH server, username, password or private key,
-and one reverse-tunnel mapping. After saving, the ESP32 restarts and does not
-create either setup server during normal operation. Existing WiFi-only files
-automatically continue with this second phase.
+an optional matching public key, and one reverse-tunnel mapping. ECDSA keys
+require the complete matching public-key line. After saving, the ESP32 restarts
+and does not create either setup server during normal operation. Existing
+WiFi-only files automatically continue with this second phase.
 
-Passwords and the optional private key are stored as plain text in LittleFS.
-Treat physical flash access as credential access. SSH credentials are entered
-only after the device has joined the trusted WiFi network.
+Passwords and the optional private/public key pair are stored as plain text in
+LittleFS. Treat physical flash access as credential access. SSH credentials are
+entered only after the device has joined the trusted WiFi network.
 
 ### Reopen configuration
 
@@ -52,11 +55,12 @@ To edit an existing tunnel configuration, press the board's **BOOT** button
 three times within two seconds. The ESP32 restarts, reconnects to the stored
 WiFi network, and opens the tunnel setup page at the IP address printed in the
 serial monitor. Existing values are filled in; stored passwords and private
-keys remain hidden and are retained when their fields are left empty.
+and public keys remain hidden and are retained when their fields are left
+empty.
 
 For a complete reset, leave the firmware running and hold **BOOT** for four
-seconds. Do not press RESET. This removes `/esp32tun.cfg`, the stored SSH
-private key, and restarts the open first-boot portal. These actions are enabled
+seconds. Do not press RESET. This removes `/esp32tun.cfg`, the stored SSH key
+pair, and restarts the open first-boot portal. These actions are enabled
 on GPIO 0 for the LOLIN S2 Mini and GPIO 9 for the ESP32-C3 reference target.
 
 ## Build, flash, and monitor
@@ -104,6 +108,8 @@ Replace `COM9` with the detected port. Validation on the tested C3 covered:
 3. Repeated channel close and reopen.
 4. Thirty-second keepalive messages and idle operation.
 5. Zero dropped bytes and heap recovery after closing the channel.
+6. ECDSA P-256 authentication with an EC-PEM private key and matching public
+   key, followed by reverse-listener creation.
 
 The tested profile is suitable as the ESP32-C3 reference configuration.
 Boards with a different flash layout or USB implementation may still need a
@@ -113,6 +119,15 @@ RSA-PEM authentication was also validated on ESP32-C3 hardware. The pinned
 `libssh2_esp` dependency requires a build-time compatibility patch; its cause,
 implementation, and test evidence are recorded in
 [RSA key authentication fix](docs/RSA_KEY_AUTH_FIX.md).
+
+ECDSA P-256 is validated with a traditional
+`-----BEGIN EC PRIVATE KEY-----` private key plus the complete matching
+`ecdsa-sha2-nistp256 ...` public-key line. The public line is required because
+the bundled mbedTLS backend cannot derive it from an EC private key. RSA-PEM
+remains compatible without supplying the public line. Ed25519 client
+authentication is not compiled into the pinned mbedTLS backend and therefore
+cannot be selected for this firmware. ECDSA P-384 and P-521 are accepted by the
+setup validator but have not yet been hardware-tested.
 
 Do not publish LittleFS images or device backups containing credentials.
 

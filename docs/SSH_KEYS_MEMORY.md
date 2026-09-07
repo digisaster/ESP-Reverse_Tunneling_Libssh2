@@ -4,9 +4,10 @@ This guide explains how to use SSH public key authentication with keys stored di
 
 The current reference firmware does not require source-code changes or a
 manual LittleFS upload. Select **Private key** on the temporary tunnel setup
-page and paste a device-specific RSA private key. The firmware stores it in
-LittleFS and loads it into memory during startup. Treat physical flash access
-as access to the unencrypted private key.
+page and paste a device-specific RSA private key, or an EC-PEM private key plus
+its matching OpenSSH public-key line. The firmware stores the supplied key data
+in LittleFS and loads it into memory during startup. Treat physical flash
+access as access to the unencrypted private key.
 
 ## Advantages of in‑memory key authentication
 
@@ -152,8 +153,9 @@ void setup() {
 - Ensure passphrase (if any) is correct
 
 ### Issue: Unsupported key format
-- libssh2 supports OpenSSH and PEM formats
-- Convert if needed: `ssh-keygen -p -m PEM -f ssh_key`
+- The exact support depends on the pinned libssh2 mbedTLS backend
+- Use traditional RSA PEM, or EC PEM with the matching public-key line
+- Ed25519 client authentication is not compiled into this backend
 
 ## Security notes
 
@@ -167,11 +169,17 @@ void setup() {
 - ✅ Unencrypted RSA private keys in traditional PEM format
   (`-----BEGIN RSA PRIVATE KEY-----`) are hardware-validated on the
   `esp32_c3_lowmem` target
+- ✅ Unencrypted ECDSA P-256 private keys in traditional PEM format
+  (`-----BEGIN EC PRIVATE KEY-----`) are hardware-validated when the complete
+  matching `ecdsa-sha2-nistp256 ...` public-key line is also supplied
 - 🧪 Encrypted RSA PEM, PKCS#8, and modern OpenSSH private-key containers still
   require systematic hardware validation
+- 🧪 ECDSA P-384 and P-521 are accepted by the setup validator but still
+  require hardware validation
 - ⚠️ Modern OpenSSH containers may depend on parser support in the pinned
   libssh2_esp version; RSA PEM is recommended for the reference firmware
-- ❌ Ed25519 is not supported by the pinned mbedTLS key-authentication path
+- ❌ Ed25519 client keys are not supported by the pinned mbedTLS
+  key-authentication path
 
 See [RSA key authentication fix and validation](RSA_KEY_AUTH_FIX.md) for the
 dependency defects fixed by the build-time compatibility patch and the exact

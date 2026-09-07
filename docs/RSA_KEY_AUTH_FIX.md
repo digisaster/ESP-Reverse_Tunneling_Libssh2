@@ -86,13 +86,15 @@ The reference build remained within the C3 profile limits at approximately
 | RSA PEM with passphrase | Not yet validated |
 | PKCS#8 PEM | Not yet validated |
 | OpenSSH RSA private-key container | Not yet validated |
-| ECDSA | Not enabled in the pinned ESP32 mbedTLS key path |
-| Ed25519 | Not supported by the pinned mbedTLS key path |
+| ECDSA P-256 EC PEM plus matching public key | Hardware validated |
+| ECDSA P-384/P-521 | Accepted by setup; not yet hardware-tested |
+| Ed25519 client key | Not supported by the pinned mbedTLS key path |
 
-Modern-key testing should proceed one variable at a time, beginning with a
-2048-bit RSA key in the known-good traditional PEM container. For each case,
+Further key testing should proceed one variable at a time. For each case,
 record the key algorithm, key size, container, encryption/passphrase status,
-ESP diagnostic result, and corresponding OpenSSH server log.
+ESP diagnostic result, and corresponding OpenSSH server log. ECDSA P-256
+requires the complete matching OpenSSH public-key line because this backend
+cannot derive it from the EC private key.
 
 Do not commit test private keys, passphrases, provisioned LittleFS images, or
 serial logs containing infrastructure credentials.
