@@ -28,6 +28,9 @@ This is the candidate baseline for `esp32tun` reference firmware
   disabled timeouts, and `millis()` wraparound.
 - Initial `esp32_c3_lowmem` build profile for a single reverse listener and
   active channel on ESP32-C3 boards without PSRAM.
+- Minis `cfg.txt` can now activate, disable, and replace the reference
+  firmware's single tunnel at runtime. The lowercase SID is used as SSH
+  username while the existing device-local key pair is retained.
 
 ### Fixed
 
@@ -57,6 +60,9 @@ This is the candidate baseline for `esp32tun` reference firmware
   reserve instead of treating every healthy sub-50-KB ESP32-C3 heap as low.
 - Public-key failures now report actionable key-pair and `authorized_keys`
   checks instead of always suggesting an OpenSSH-to-PEM conversion.
+- Managed configuration is persisted only after the new SSH session and
+  listener succeed. Failed activation restores the previous runtime settings;
+  configuration writes use a recoverable temporary/backup-file replacement.
 
 ### Validated
 

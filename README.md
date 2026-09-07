@@ -131,6 +131,20 @@ setup validator but have not yet been hardware-tested.
 
 Do not publish LittleFS images or device backups containing credentials.
 
+### Minis-managed configuration
+
+The reference firmware checks `/hb/<sid>/cfg.txt` at startup and after each
+heartbeat. A complete configuration can enable or disable the tunnel and set
+`SSH_HOST`, `SSH_PORT`, `REMOTE_BIND_HOST`, `REMOTE_BIND_PORT`, `LOCAL_HOST`,
+and `LOCAL_PORT`. The SSH username is always the lowercase SID; no
+`SSH_USER` field is accepted.
+
+The SSH key pair remains stored locally and is not delivered by Minis. A new
+managed configuration is stored only after its SSH session and reverse
+listener succeed. If activation fails, the firmware restores the previous
+runtime configuration. See the [example guide](examples/README.md) for the
+complete `cfg.txt` format and current proof-of-concept security boundary.
+
 ## Status LED
 
 Both hardware reference profiles enable an active-low onboard status LED:
@@ -149,6 +163,7 @@ The indicator uses no task, timer object, PWM, or dynamic allocation; a small
 | Setup page active | 0.5 seconds on, 0.5 seconds off |
 | WiFi or SSH connection in progress | Two short flashes every 2 seconds |
 | Reverse tunnel connected | Off |
+| Tunnel disabled by Minis | Off |
 | Connection or authentication error | Three short flashes every 2 seconds |
 
 These pin and polarity settings match the tested C3 Super Mini and WEMOS LOLIN

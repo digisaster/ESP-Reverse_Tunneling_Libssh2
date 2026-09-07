@@ -6,6 +6,7 @@
 #include <WiFiClientSecure.h>
 #include <esp_random.h>
 #include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 #include <freertos/task.h>
 #include <climits>
 #include <cstring>
@@ -33,6 +34,7 @@ constexpr const char *CACHED_CONFIG_TEMP_PATH = "/minis.cfg.tmp";
 constexpr const char *CACHED_CONFIG_BACKUP_PATH = "/minis.cfg.bak";
 
 TaskHandle_t heartbeatTaskHandle = nullptr;
+QueueHandle_t managedConfigQueue = nullptr;
 uint16_t heartbeatIntervalMin = ONBOARDING_HEARTBEAT_INTERVAL_MIN;
 bool candidateTunnelKnown = false;
 uint16_t candidateHeartbeatIntervalMin = ONBOARDING_HEARTBEAT_INTERVAL_MIN;
@@ -43,6 +45,16 @@ String candidateRemoteBindHost;
 uint16_t candidateRemoteBindPort = 0;
 String candidateLocalHost;
 uint16_t candidateLocalPort = 0;
+
+struct QueuedManagedConfig {
+  bool enabled;
+  uint16_t sshPort;
+  uint16_t remoteBindPort;
+  uint16_t localPort;
+  char sshHost[MAX_CONFIG_HOST_LENGTH + 1];
+  char remoteBindHost[MAX_CONFIG_HOST_LENGTH + 1];
+  char localHost[MAX_CONFIG_HOST_LENGTH + 1];
+};
 
 enum class SettingResult { NotFound, Valid, Invalid };
 
@@ -134,8 +146,8 @@ int performGet(const char *suffix, char *response, size_t responseCapacity,
   }
 
   WiFiClientSecure secureClient;
-  // Certificate validation will be enabled before remote tunnel settings are
-  // accepted. This step only activates a safely bounded heartbeat interval.
+  // Certificate validation is deliberately deferred for this proof-of-concept.
+  // Values are strictly parsed and bounded, but are not yet authenticated.
   secureClient.setInsecure();
   secureClient.setTimeout(MINIS_TIMEOUT_MS);
 
@@ -556,6 +568,23 @@ bool writeCachedConfig(const ParsedConfig &parsed) {
   return true;
 }
 
+bool queueManagedConfig(const ParsedConfig &parsed) {
+  if (managedConfigQueue == nullptr) {
+    return false;
+  }
+
+  QueuedManagedConfig queued{};
+  queued.enabled = parsed.tunnelEnabled;
+  queued.sshPort = parsed.sshPort;
+  queued.remoteBindPort = parsed.remoteBindPort;
+  queued.localPort = parsed.localPort;
+  strlcpy(queued.sshHost, parsed.sshHost, sizeof(queued.sshHost));
+  strlcpy(queued.remoteBindHost, parsed.remoteBindHost,
+          sizeof(queued.remoteBindHost));
+  strlcpy(queued.localHost, parsed.localHost, sizeof(queued.localHost));
+  return xQueueOverwrite(managedConfigQueue, &queued) == pdPASS;
+}
+
 bool processCandidateConfig(const ParsedConfig &parsed, bool persist) {
   const bool anyCandidateField =
       parsed.tunnelEnabledPresent || parsed.sshHostPresent ||
@@ -581,9 +610,13 @@ bool processCandidateConfig(const ParsedConfig &parsed, bool persist) {
       candidateLocalHost != parsed.localHost ||
       parsed.localPort != candidateLocalPort;
   if (!changed) {
-    LOG_I("MINIS",
-          "Fetched Minis config unchanged (candidate only; active tunnel "
-          "unchanged)");
+    if (persist && !queueManagedConfig(parsed)) {
+      LOG_W("MINIS", "Unable to queue Minis config for activation");
+      return false;
+    }
+    LOG_I("MINIS", persist ? "Fetched Minis config unchanged; activation "
+                             "check queued"
+                           : "Cached Minis config unchanged");
     return true;
   }
 
@@ -603,7 +636,7 @@ bool processCandidateConfig(const ParsedConfig &parsed, bool persist) {
   candidateLocalPort = parsed.localPort;
 
   LOGF_I("MINIS",
-         "%s tunnel config (not active): enabled=%s ssh=%s@%s:%u "
+         "%s tunnel config: enabled=%s ssh=%s@%s:%u "
          "remote=%s:%u local=%s:%u",
          persist ? "Stored" : "Cached", candidateTunnelEnabled ? "yes" : "no",
          sid().c_str(), candidateSshHost.c_str(),
@@ -612,7 +645,15 @@ bool processCandidateConfig(const ParsedConfig &parsed, bool persist) {
          static_cast<unsigned int>(candidateRemoteBindPort),
          candidateLocalHost.c_str(),
          static_cast<unsigned int>(candidateLocalPort));
-  LOG_I("MINIS", "SSH credentials: key required, not remotely provisioned");
+  if (persist) {
+    if (!queueManagedConfig(parsed)) {
+      LOG_W("MINIS", "Unable to queue Minis config for activation");
+      return false;
+    }
+    LOG_I("MINIS", "Tunnel activation check queued; using locally stored key");
+  } else {
+    LOG_I("MINIS", "Cached tunnel config loaded; awaiting fresh Minis config");
+  }
   return true;
 }
 
@@ -739,12 +780,42 @@ bool startHeartbeatTask() {
     return true;
   }
 
+  if (managedConfigQueue == nullptr) {
+    managedConfigQueue = xQueueCreate(1, sizeof(QueuedManagedConfig));
+    if (managedConfigQueue == nullptr) {
+      LOG_W("MINIS", "Unable to create managed-config queue");
+      return false;
+    }
+  }
+
   if (xTaskCreate(heartbeatTask, "minis_hb", HEARTBEAT_TASK_STACK_BYTES,
                   nullptr, 1, &heartbeatTaskHandle) != pdPASS) {
     heartbeatTaskHandle = nullptr;
+    vQueueDelete(managedConfigQueue);
+    managedConfigQueue = nullptr;
     LOG_W("MINIS", "Unable to start heartbeat task");
     return false;
   }
+  return true;
+}
+
+bool takeManagedTunnelConfig(ManagedTunnelConfig &config) {
+  if (managedConfigQueue == nullptr) {
+    return false;
+  }
+
+  QueuedManagedConfig queued{};
+  if (xQueueReceive(managedConfigQueue, &queued, 0) != pdPASS) {
+    return false;
+  }
+
+  config.enabled = queued.enabled;
+  config.sshHost = queued.sshHost;
+  config.sshPort = queued.sshPort;
+  config.remoteBindHost = queued.remoteBindHost;
+  config.remoteBindPort = queued.remoteBindPort;
+  config.localHost = queued.localHost;
+  config.localPort = queued.localPort;
   return true;
 }
 

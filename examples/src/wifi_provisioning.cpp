@@ -13,6 +13,7 @@ namespace wifi_provisioning {
 namespace {
 constexpr char CONFIG_PATH[] = "/esp32tun.cfg";
 constexpr char CONFIG_TEMP[] = "/esp32tun.cfg.tmp";
+constexpr char CONFIG_BACKUP[] = "/esp32tun.cfg.bak";
 constexpr char KEY_PATH[] = "/esp32tun_ssh_key";
 constexpr char KEY_TEMP[] = "/esp32tun_ssh_key.tmp";
 constexpr char PUBLIC_KEY_PATH[] = "/esp32tun_ssh_key.pub";
@@ -188,7 +189,7 @@ bool writeConfig(const DeviceRuntimeConfig &c) {
   File file = LittleFS.open(CONFIG_TEMP, "w");
   if (!file)
     return false;
-  file.println(F("version=2"));
+  file.println(F("version=3"));
   file.println(c.setupComplete ? F("setup_complete=1") : F("setup_complete=0"));
   writeValue(file, "wifi_ssid", c.wifiSsid);
   writeValue(file, "wifi_password", c.wifiPassword);
@@ -201,14 +202,29 @@ bool writeConfig(const DeviceRuntimeConfig &c) {
                                                             : "password");
     writeValue(file, "ssh_password", c.sshPassword);
     writeValue(file, "ssh_key_passphrase", c.sshKeyPassphrase);
+    writeValue(file, "tunnel_enabled", c.tunnelEnabled ? "1" : "0");
     writeValue(file, "remote_host", c.remoteBindHost);
     writeValue(file, "remote_port", String(c.remoteBindPort));
     writeValue(file, "local_host", c.localHost);
     writeValue(file, "local_port", String(c.localPort));
   }
+  file.flush();
   file.close();
-  LittleFS.remove(CONFIG_PATH);
-  return LittleFS.rename(CONFIG_TEMP, CONFIG_PATH);
+
+  LittleFS.remove(CONFIG_BACKUP);
+  const bool hadExistingConfig = LittleFS.exists(CONFIG_PATH);
+  if (hadExistingConfig && !LittleFS.rename(CONFIG_PATH, CONFIG_BACKUP)) {
+    LittleFS.remove(CONFIG_TEMP);
+    return false;
+  }
+  if (!LittleFS.rename(CONFIG_TEMP, CONFIG_PATH)) {
+    if (hadExistingConfig)
+      LittleFS.rename(CONFIG_BACKUP, CONFIG_PATH);
+    LittleFS.remove(CONFIG_TEMP);
+    return false;
+  }
+  LittleFS.remove(CONFIG_BACKUP);
+  return true;
 }
 bool writeKeyFile(const char *path, const String &key) {
   File file = LittleFS.open(path, "w");
@@ -241,11 +257,16 @@ bool saveKeys(const String &privateKey, const String &publicKey) {
   return true;
 }
 bool loadConfig(DeviceRuntimeConfig &c) {
+  if (!LittleFS.exists(CONFIG_PATH) && LittleFS.exists(CONFIG_BACKUP))
+    LittleFS.rename(CONFIG_BACKUP, CONFIG_PATH);
+  else if (LittleFS.exists(CONFIG_PATH))
+    LittleFS.remove(CONFIG_BACKUP);
+
   File file = LittleFS.open(CONFIG_PATH, "r");
   if (!file)
     return false;
   int version = 0;
-  String complete, sshPort, remotePort, localPort, auth;
+  String complete, sshPort, remotePort, localPort, auth, tunnelEnabled;
   while (file.available()) {
     String line = file.readStringUntil('\n');
     if (line.endsWith("\r"))
@@ -276,6 +297,8 @@ bool loadConfig(DeviceRuntimeConfig &c) {
       c.sshPassword = value;
     else if (name == "ssh_key_passphrase")
       c.sshKeyPassphrase = value;
+    else if (name == "tunnel_enabled")
+      tunnelEnabled = value;
     else if (name == "remote_host")
       c.remoteBindHost = value;
     else if (name == "remote_port")
@@ -285,11 +308,17 @@ bool loadConfig(DeviceRuntimeConfig &c) {
     else if (name == "local_port")
       localPort = value;
   }
-  if ((version != 1 && version != 2) || c.wifiSsid.isEmpty() ||
+  if ((version != 1 && version != 2 && version != 3) ||
+      c.wifiSsid.isEmpty() ||
       c.wifiSsid.length() > 32 || c.wifiPassword.length() > 63)
     return false;
-  if (version != 2 || complete != "1")
+  if (version == 1 || complete != "1")
     return true;
+  if (version == 3) {
+    if (tunnelEnabled != "0" && tunnelEnabled != "1")
+      return true;
+    c.tunnelEnabled = tunnelEnabled == "1";
+  }
   c.sshAuthMethod =
       auth == "key" ? SSHAuthMethod::PrivateKey : SSHAuthMethod::Password;
   if (!parsePort(sshPort, c.sshPort) ||
@@ -463,6 +492,7 @@ bool startDevicePortalInternal() {
         c.sshKeyPassphrase = submittedPassphrase;
     }
     c.setupComplete = true;
+    c.tunnelEnabled = true;
     if (!validDeviceConfig(c)) {
       sendDevicePage(c.sshAuthMethod == SSHAuthMethod::PrivateKey
                          ? "Enter a valid private key and optional OpenSSH "
@@ -594,6 +624,11 @@ bool startDeviceSetup(DeviceRuntimeConfig &config) {
   current = &config;
   return WiFi.status() == WL_CONNECTED && startDevicePortalInternal();
 }
+bool saveManagedConfig(const DeviceRuntimeConfig &config) {
+  if (!config.setupComplete)
+    return false;
+  return writeConfig(config);
+}
 bool isActive() { return mode != PortalMode::None; }
 bool editRequested() { return configEditRequested; }
 void pollConfigResetButton() {
@@ -646,6 +681,7 @@ void pollConfigResetButton() {
   stopServices();
   LittleFS.remove(CONFIG_PATH);
   LittleFS.remove(CONFIG_TEMP);
+  LittleFS.remove(CONFIG_BACKUP);
   LittleFS.remove(KEY_PATH);
   LittleFS.remove(KEY_TEMP);
   LittleFS.remove(PUBLIC_KEY_PATH);

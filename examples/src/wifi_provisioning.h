@@ -15,6 +15,7 @@ struct DeviceRuntimeConfig {
   String sshPrivateKey;
   String sshPublicKey;
   String sshKeyPassphrase;
+  bool tunnelEnabled = true;
   String remoteBindHost = "127.0.0.1";
   int remoteBindPort = 23180;
   String localHost = "192.168.1.1";
@@ -24,6 +25,9 @@ struct DeviceRuntimeConfig {
 namespace wifi_provisioning {
 bool begin(DeviceRuntimeConfig &config);
 bool startDeviceSetup(DeviceRuntimeConfig &config);
+// Persists managed tunnel fields without replacing the separately stored key
+// pair. The caller updates config only after validating the new runtime.
+bool saveManagedConfig(const DeviceRuntimeConfig &config);
 bool isActive();
 bool editRequested();
 void pollConfigResetButton();

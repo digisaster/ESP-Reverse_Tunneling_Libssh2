@@ -10,6 +10,7 @@ enum class State : uint8_t {
   Setup,
   Connecting,
   Connected,
+  Disabled,
   Error,
 };
 

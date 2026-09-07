@@ -83,6 +83,38 @@ not be restored after a partial write and buffered payload abandoned during an
 error close. Normal C3 operation below 50 KB free heap no longer produces a
 warning; warnings are reserved for critically low usable heap.
 
+## Minis-managed tunnel configuration
+
+After every heartbeat, the firmware requests `/hb/<sid>/cfg.txt`. A complete
+managed configuration has this form:
+
+```ini
+HB_INTERVAL_MIN=2
+TUNNEL_ENABLED=yes
+SSH_HOST=edp.supcom.nl
+SSH_PORT=443
+REMOTE_BIND_HOST=127.0.0.1
+REMOTE_BIND_PORT=23181
+LOCAL_HOST=192.168.19.10
+LOCAL_PORT=22
+```
+
+The SSH username is not supplied by `cfg.txt`; it is always the eight-character
+lowercase SID. The private/public key pair and optional passphrase remain in
+LittleFS and are never downloaded from Minis. Managed activation is therefore
+accepted only when private-key authentication is already configured locally.
+
+When a valid fetched configuration differs from the active settings, the
+firmware stops the current tunnel and tries the new SSH session and listener.
+It stores the new settings only after activation succeeds. On failure it
+restores and reconnects the previous configuration. `TUNNEL_ENABLED=no`
+cleanly stops the tunnel while WiFi and the heartbeat service remain active.
+
+For this proof-of-concept the Minis HTTPS client still uses `setInsecure()`.
+The fields are strictly validated, but the response is not yet protected
+against an impersonated server. Certificate validation is required before
+production deployment.
+
 ## Single and multiple tunnels
 
 The reference firmware uses the single mapping saved by the setup page:
