@@ -29,6 +29,7 @@ Thumbs.db
 *.tmp
 *.temp
 *.log
+platformio-diagnostics-*.txt
 .vscode
 
 
