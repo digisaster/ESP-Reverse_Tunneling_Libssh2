@@ -19,8 +19,10 @@ constexpr const char *MINIS_PATH = "/hb/";
 constexpr const char *MINIS_BASE_URL = "https://cloud.supcom.nl/hb/";
 constexpr const char *MINIS_USER_AGENT = "MHB;vESP32";
 constexpr uint32_t MINIS_TIMEOUT_MS = 5000;
-constexpr uint16_t DEFAULT_HEARTBEAT_INTERVAL_MIN = 15;
-constexpr uint16_t MIN_HEARTBEAT_INTERVAL_MIN = 5;
+// Until the first valid Minis config is cached, poll relatively quickly so a
+// newly provisioned device can adopt its managed settings without a long wait.
+constexpr uint16_t ONBOARDING_HEARTBEAT_INTERVAL_MIN = 2;
+constexpr uint16_t MIN_HEARTBEAT_INTERVAL_MIN = 2;
 constexpr uint16_t MAX_HEARTBEAT_INTERVAL_MIN = 1440;
 constexpr uint32_t INITIAL_CONFIG_DELAY_MS = 5000;
 constexpr uint32_t HEARTBEAT_TASK_STACK_BYTES = 6144;
@@ -31,9 +33,9 @@ constexpr const char *CACHED_CONFIG_TEMP_PATH = "/minis.cfg.tmp";
 constexpr const char *CACHED_CONFIG_BACKUP_PATH = "/minis.cfg.bak";
 
 TaskHandle_t heartbeatTaskHandle = nullptr;
-uint16_t heartbeatIntervalMin = DEFAULT_HEARTBEAT_INTERVAL_MIN;
+uint16_t heartbeatIntervalMin = ONBOARDING_HEARTBEAT_INTERVAL_MIN;
 bool candidateTunnelKnown = false;
-uint16_t candidateHeartbeatIntervalMin = DEFAULT_HEARTBEAT_INTERVAL_MIN;
+uint16_t candidateHeartbeatIntervalMin = ONBOARDING_HEARTBEAT_INTERVAL_MIN;
 bool candidateTunnelEnabled = false;
 String candidateSshHost;
 uint16_t candidateSshPort = 0;
@@ -579,7 +581,9 @@ bool processCandidateConfig(const ParsedConfig &parsed, bool persist) {
       candidateLocalHost != parsed.localHost ||
       parsed.localPort != candidateLocalPort;
   if (!changed) {
-    LOG_I("MINIS", "Minis config candidate unchanged");
+    LOG_I("MINIS",
+          "Fetched Minis config unchanged (candidate only; active tunnel "
+          "unchanged)");
     return true;
   }
 
