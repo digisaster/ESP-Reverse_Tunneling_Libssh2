@@ -116,6 +116,10 @@ bool mountStorage() {
   LOG_W("SETUP", "Formatting configuration storage");
   return LittleFS.format() && LittleFS.begin(false);
 }
+void removeIfExists(const char *path) {
+  if (LittleFS.exists(path))
+    LittleFS.remove(path);
+}
 bool parsePort(const String &value, int &port) {
   if (value.isEmpty())
     return false;
@@ -211,19 +215,19 @@ bool writeConfig(const DeviceRuntimeConfig &c) {
   file.flush();
   file.close();
 
-  LittleFS.remove(CONFIG_BACKUP);
+  removeIfExists(CONFIG_BACKUP);
   const bool hadExistingConfig = LittleFS.exists(CONFIG_PATH);
   if (hadExistingConfig && !LittleFS.rename(CONFIG_PATH, CONFIG_BACKUP)) {
-    LittleFS.remove(CONFIG_TEMP);
+    removeIfExists(CONFIG_TEMP);
     return false;
   }
   if (!LittleFS.rename(CONFIG_TEMP, CONFIG_PATH)) {
     if (hadExistingConfig)
       LittleFS.rename(CONFIG_BACKUP, CONFIG_PATH);
-    LittleFS.remove(CONFIG_TEMP);
+    removeIfExists(CONFIG_TEMP);
     return false;
   }
-  LittleFS.remove(CONFIG_BACKUP);
+  removeIfExists(CONFIG_BACKUP);
   return true;
 }
 bool writeKeyFile(const char *path, const String &key) {
@@ -235,22 +239,22 @@ bool writeKeyFile(const char *path, const String &key) {
   return written == key.length();
 }
 bool saveKeys(const String &privateKey, const String &publicKey) {
-  LittleFS.remove(KEY_TEMP);
-  LittleFS.remove(PUBLIC_KEY_TEMP);
+  removeIfExists(KEY_TEMP);
+  removeIfExists(PUBLIC_KEY_TEMP);
   if (!writeKeyFile(KEY_TEMP, privateKey))
     return false;
   if (!publicKey.isEmpty() && !writeKeyFile(PUBLIC_KEY_TEMP, publicKey)) {
-    LittleFS.remove(KEY_TEMP);
+    removeIfExists(KEY_TEMP);
     return false;
   }
 
-  LittleFS.remove(KEY_PATH);
+  removeIfExists(KEY_PATH);
   if (!LittleFS.rename(KEY_TEMP, KEY_PATH)) {
-    LittleFS.remove(PUBLIC_KEY_TEMP);
+    removeIfExists(PUBLIC_KEY_TEMP);
     return false;
   }
 
-  LittleFS.remove(PUBLIC_KEY_PATH);
+  removeIfExists(PUBLIC_KEY_PATH);
   if (!publicKey.isEmpty() &&
       !LittleFS.rename(PUBLIC_KEY_TEMP, PUBLIC_KEY_PATH))
     return false;
@@ -260,7 +264,7 @@ bool loadConfig(DeviceRuntimeConfig &c) {
   if (!LittleFS.exists(CONFIG_PATH) && LittleFS.exists(CONFIG_BACKUP))
     LittleFS.rename(CONFIG_BACKUP, CONFIG_PATH);
   else if (LittleFS.exists(CONFIG_PATH))
-    LittleFS.remove(CONFIG_BACKUP);
+    removeIfExists(CONFIG_BACKUP);
 
   File file = LittleFS.open(CONFIG_PATH, "r");
   if (!file)
@@ -507,9 +511,9 @@ bool startDevicePortalInternal() {
       }
       c.sshPassword = "";
     } else {
-      LittleFS.remove(KEY_PATH);
+      removeIfExists(KEY_PATH);
       c.sshPrivateKey = "";
-      LittleFS.remove(PUBLIC_KEY_PATH);
+      removeIfExists(PUBLIC_KEY_PATH);
       c.sshPublicKey = "";
       c.sshKeyPassphrase = "";
     }
@@ -517,7 +521,7 @@ bool startDevicePortalInternal() {
       sendDevicePage("The configuration could not be stored.");
       return;
     }
-    LittleFS.remove(EDIT_REQUEST_PATH);
+    removeIfExists(EDIT_REQUEST_PATH);
     configEditRequested = false;
     String p = pageStart("Setup complete");
     p += F("<p>The device will restart and start the reverse "
@@ -679,14 +683,14 @@ void pollConfigResetButton() {
 
   LOG_W("SETUP", "BOOT held: removing stored configuration and restarting");
   stopServices();
-  LittleFS.remove(CONFIG_PATH);
-  LittleFS.remove(CONFIG_TEMP);
-  LittleFS.remove(CONFIG_BACKUP);
-  LittleFS.remove(KEY_PATH);
-  LittleFS.remove(KEY_TEMP);
-  LittleFS.remove(PUBLIC_KEY_PATH);
-  LittleFS.remove(PUBLIC_KEY_TEMP);
-  LittleFS.remove(EDIT_REQUEST_PATH);
+  removeIfExists(CONFIG_PATH);
+  removeIfExists(CONFIG_TEMP);
+  removeIfExists(CONFIG_BACKUP);
+  removeIfExists(KEY_PATH);
+  removeIfExists(KEY_TEMP);
+  removeIfExists(PUBLIC_KEY_PATH);
+  removeIfExists(PUBLIC_KEY_TEMP);
+  removeIfExists(EDIT_REQUEST_PATH);
   delay(250);
   ESP.restart();
 #endif

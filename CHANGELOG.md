@@ -63,6 +63,8 @@ This is the candidate baseline for `esp32tun` reference firmware
 - Managed configuration is persisted only after the new SSH session and
   listener succeed. Failed activation restores the previous runtime settings;
   configuration writes use a recoverable temporary/backup-file replacement.
+- Optional LittleFS cleanup now checks for temporary files before removing
+  them, avoiding misleading `vfs_api.cpp` errors during successful updates.
 
 ### Validated
 
@@ -83,6 +85,9 @@ This is the candidate baseline for `esp32tun` reference firmware
   and reached the connected state after a device reset. Ed25519 client keys
   remain unsupported by the pinned mbedTLS backend; ECDSA P-384 and P-521 have
   not yet been hardware-tested.
+- Minis-managed settings survived a hardware reset, authenticated directly as
+  the lowercase SID, recreated listener `23182`, and forwarded an interactive
+  channel with 1,915 bytes sent, 1,997 bytes received, and zero dropped bytes.
 
 ### Documentation
 
@@ -90,6 +95,9 @@ This is the candidate baseline for `esp32tun` reference firmware
   stale-listener, and channel-timeout instructions.
 - Added a technical record of the pinned `libssh2_esp` RSA compatibility patch
   and the validated beta baseline.
+- Added a one-command Windows ESP32-C3 build check that rejects stale
+  `C:\pio` installations and automatically repairs the known nested-toolchain
+  layout used by the failing workstation.
 
 ## [2.2.0] — 2026-04-30 — Stabilization
 

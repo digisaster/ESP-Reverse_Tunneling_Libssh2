@@ -77,6 +77,33 @@ pio device monitor -e lolin_s2_mini --port COM9 --baud 115200
 Replace `COM9` with the port reported by `pio device list`. Close the serial
 monitor with `Ctrl+C` before flashing, otherwise the port remains busy.
 
+### Reproducible Windows/VS Code setup
+
+Use only the **PIOArduino IDE** extension. If both competing extensions are
+installed, remove the old PlatformIO extension and restart VS Code:
+
+```powershell
+code --uninstall-extension platformio.platformio-ide
+code --install-extension pioarduino.pioarduino-ide
+```
+
+Open a PowerShell terminal in the repository root. Do not use an old `C:\pio`
+executable. The following repository script locates the PIOArduino user Core at
+`%USERPROFILE%\.platformio`, repairs the incorrectly nested Windows RISC-V
+toolchain layout encountered during ESP32-C3 builds, and performs a clean
+build:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\build-esp32-c3-windows.ps1 -Clean
+```
+
+The script deliberately does not flash. If it cannot repair the environment,
+create a diagnostic report with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\diagnose-platformio.ps1
+```
+
 If automatic bootloader entry fails on an ESP32-S2:
 
 1. Hold `BOOT` (or `0`).

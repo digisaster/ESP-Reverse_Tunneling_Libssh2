@@ -85,6 +85,12 @@ struct ParsedConfig {
   uint16_t localPort = 0;
 };
 
+void removeIfExists(const char *path) {
+  if (LittleFS.exists(path)) {
+    LittleFS.remove(path);
+  }
+}
+
 String buildSid() {
   const uint64_t chipId = ESP.getEfuseMac();
   const uint32_t shortId = static_cast<uint32_t>(chipId & 0xFFFFFFFFULL);
@@ -520,7 +526,7 @@ bool hasCompleteTunnelConfig(const ParsedConfig &parsed) {
 }
 
 bool writeCachedConfig(const ParsedConfig &parsed) {
-  LittleFS.remove(CACHED_CONFIG_TEMP_PATH);
+  removeIfExists(CACHED_CONFIG_TEMP_PATH);
   File file = LittleFS.open(CACHED_CONFIG_TEMP_PATH, "w");
   if (!file) {
     return false;
@@ -548,11 +554,11 @@ bool writeCachedConfig(const ParsedConfig &parsed) {
   file.flush();
   file.close();
 
-  LittleFS.remove(CACHED_CONFIG_BACKUP_PATH);
+  removeIfExists(CACHED_CONFIG_BACKUP_PATH);
   const bool hadExistingConfig = LittleFS.exists(CACHED_CONFIG_PATH);
   if (hadExistingConfig &&
       !LittleFS.rename(CACHED_CONFIG_PATH, CACHED_CONFIG_BACKUP_PATH)) {
-    LittleFS.remove(CACHED_CONFIG_TEMP_PATH);
+    removeIfExists(CACHED_CONFIG_TEMP_PATH);
     return false;
   }
 
@@ -560,11 +566,11 @@ bool writeCachedConfig(const ParsedConfig &parsed) {
     if (hadExistingConfig) {
       LittleFS.rename(CACHED_CONFIG_BACKUP_PATH, CACHED_CONFIG_PATH);
     }
-    LittleFS.remove(CACHED_CONFIG_TEMP_PATH);
+    removeIfExists(CACHED_CONFIG_TEMP_PATH);
     return false;
   }
 
-  LittleFS.remove(CACHED_CONFIG_BACKUP_PATH);
+  removeIfExists(CACHED_CONFIG_BACKUP_PATH);
   return true;
 }
 
