@@ -209,6 +209,10 @@ foreach ($root in $candidateRoots) {
 
     $toolchainRoot = Join-Path $root "packages\toolchain-riscv32-esp"
     if (Test-Path -LiteralPath $toolchainRoot -PathType Container) {
+        Add-CommandOutput "Top-level toolchain layout under $toolchainRoot" {
+            Get-ChildItem -LiteralPath $toolchainRoot -Force -ErrorAction SilentlyContinue |
+                Select-Object Mode, Name, FullName
+        }.GetNewClosure()
         Get-ChildItem -LiteralPath $toolchainRoot -Recurse -File `
             -Filter "riscv32-esp-elf-g++.exe" -ErrorAction SilentlyContinue |
             ForEach-Object {
@@ -261,7 +265,7 @@ foreach ($compiler in $compilers) {
     Add-CommandOutput "$compiler -print-multi-lib" { & $compiler -print-multi-lib }.GetNewClosure()
 
     try {
-        $standardLibrary = (& $compiler -print-file-name=libstdc++.a 2>$null | Select-Object -First 1).Trim()
+        $standardLibrary = (& $compiler '-print-file-name=libstdc++.a' 2>$null | Select-Object -First 1).Trim()
         if ($standardLibrary) {
             Add-FileDetails "Default libstdc++.a selected by compiler" $standardLibrary
         }
@@ -269,7 +273,7 @@ foreach ($compiler in $compilers) {
         $c3StandardLibrary = (& $compiler `
             -march=rv32imc_zicsr_zifencei `
             -mabi=ilp32 `
-            -print-file-name=libstdc++.a 2>$null |
+            '-print-file-name=libstdc++.a' 2>$null |
             Select-Object -First 1).Trim()
         if ($c3StandardLibrary) {
             Add-FileDetails "ESP32-C3 libstdc++.a selected by compiler" $c3StandardLibrary
