@@ -15,9 +15,12 @@ constexpr char CONFIG_PATH[] = "/esp32tun.cfg";
 constexpr char CONFIG_TEMP[] = "/esp32tun.cfg.tmp";
 constexpr char KEY_PATH[] = "/esp32tun_ssh_key";
 constexpr char KEY_TEMP[] = "/esp32tun_ssh_key.tmp";
+constexpr char PUBLIC_KEY_PATH[] = "/esp32tun_ssh_key.pub";
+constexpr char PUBLIC_KEY_TEMP[] = "/esp32tun_ssh_key.pub.tmp";
 constexpr char EDIT_REQUEST_PATH[] = "/esp32tun.edit";
 constexpr unsigned long WIFI_TIMEOUT_MS = 20000;
 constexpr size_t MAX_KEY_SIZE = 16384;
+constexpr size_t MAX_PUBLIC_KEY_SIZE = 4096;
 constexpr unsigned long CONFIG_RESET_HOLD_MS = 4000;
 constexpr unsigned long CONFIG_CLICK_MIN_MS = 40;
 constexpr unsigned long CONFIG_CLICK_WINDOW_MS = 2000;
@@ -129,12 +132,41 @@ bool validKey(const String &key) {
          key.indexOf("-----BEGIN") >= 0 &&
          key.indexOf("PRIVATE KEY-----") >= 0 && key.indexOf("-----END") >= 0;
 }
-bool loadKey(String &key) {
+bool validPublicKey(const String &key) {
+  if (key.isEmpty())
+    return true;
+  if (key.length() > MAX_PUBLIC_KEY_SIZE)
+    return false;
+
+  String trimmed = key;
+  trimmed.trim();
+  const int separator = trimmed.indexOf(' ');
+  if (separator <= 0 || separator == static_cast<int>(trimmed.length() - 1))
+    return false;
+
+  const String algorithm = trimmed.substring(0, separator);
+  return algorithm == "ssh-rsa" || algorithm == "ecdsa-sha2-nistp256" ||
+         algorithm == "ecdsa-sha2-nistp384" ||
+         algorithm == "ecdsa-sha2-nistp521";
+}
+bool loadKeys(String &privateKey, String &publicKey) {
   File file = LittleFS.open(KEY_PATH, "r");
   if (!file || file.size() == 0 || file.size() > MAX_KEY_SIZE)
     return false;
-  key = file.readString();
-  return validKey(key);
+  privateKey = file.readString();
+  file.close();
+  if (!validKey(privateKey))
+    return false;
+
+  publicKey = "";
+  file = LittleFS.open(PUBLIC_KEY_PATH, "r");
+  if (!file)
+    return true;
+  if (file.size() == 0 || file.size() > MAX_PUBLIC_KEY_SIZE)
+    return false;
+  publicKey = file.readString();
+  file.close();
+  return validPublicKey(publicKey);
 }
 bool validDeviceConfig(const DeviceRuntimeConfig &c) {
   if (c.sshHost.isEmpty() || c.sshHost.length() > 253 ||
@@ -143,8 +175,9 @@ bool validDeviceConfig(const DeviceRuntimeConfig &c) {
       c.remoteBindPort < 1 || c.remoteBindPort > 65535 ||
       c.localHost.isEmpty() || c.localPort < 1 || c.localPort > 65535)
     return false;
-  return c.sshAuthMethod == SSHAuthMethod::Password ? !c.sshPassword.isEmpty()
-                                                    : validKey(c.sshPrivateKey);
+  return c.sshAuthMethod == SSHAuthMethod::Password
+             ? !c.sshPassword.isEmpty()
+             : validKey(c.sshPrivateKey) && validPublicKey(c.sshPublicKey);
 }
 void writeValue(File &file, const char *name, const String &value) {
   file.print(name);
@@ -177,14 +210,35 @@ bool writeConfig(const DeviceRuntimeConfig &c) {
   LittleFS.remove(CONFIG_PATH);
   return LittleFS.rename(CONFIG_TEMP, CONFIG_PATH);
 }
-bool saveKey(const String &key) {
-  File file = LittleFS.open(KEY_TEMP, "w");
+bool writeKeyFile(const char *path, const String &key) {
+  File file = LittleFS.open(path, "w");
   if (!file)
     return false;
-  file.print(key);
+  const size_t written = file.print(key);
   file.close();
+  return written == key.length();
+}
+bool saveKeys(const String &privateKey, const String &publicKey) {
+  LittleFS.remove(KEY_TEMP);
+  LittleFS.remove(PUBLIC_KEY_TEMP);
+  if (!writeKeyFile(KEY_TEMP, privateKey))
+    return false;
+  if (!publicKey.isEmpty() && !writeKeyFile(PUBLIC_KEY_TEMP, publicKey)) {
+    LittleFS.remove(KEY_TEMP);
+    return false;
+  }
+
   LittleFS.remove(KEY_PATH);
-  return LittleFS.rename(KEY_TEMP, KEY_PATH);
+  if (!LittleFS.rename(KEY_TEMP, KEY_PATH)) {
+    LittleFS.remove(PUBLIC_KEY_TEMP);
+    return false;
+  }
+
+  LittleFS.remove(PUBLIC_KEY_PATH);
+  if (!publicKey.isEmpty() &&
+      !LittleFS.rename(PUBLIC_KEY_TEMP, PUBLIC_KEY_PATH))
+    return false;
+  return true;
 }
 bool loadConfig(DeviceRuntimeConfig &c) {
   File file = LittleFS.open(CONFIG_PATH, "r");
@@ -242,7 +296,8 @@ bool loadConfig(DeviceRuntimeConfig &c) {
       !parsePort(remotePort, c.remoteBindPort) ||
       !parsePort(localPort, c.localPort))
     return true;
-  if (c.sshAuthMethod == SSHAuthMethod::PrivateKey && !loadKey(c.sshPrivateKey))
+  if (c.sshAuthMethod == SSHAuthMethod::PrivateKey &&
+      !loadKeys(c.sshPrivateKey, c.sshPublicKey))
     return true;
   c.setupComplete = validDeviceConfig(c);
   return true;
@@ -324,7 +379,11 @@ void sendDevicePage(const String &error = "") {
          "placeholder='Leave blank to keep the stored password'></div><div "
          "id='key-fields' class='hidden'><label>Private key</label><textarea "
          "name='ssh_private_key' maxlength='16384' placeholder='Leave blank "
-         "to keep the stored private key'></textarea><label>Key passphrase "
+         "to keep the stored private key'></textarea><label>Public key "
+         "(recommended for ECDSA)</label><textarea name='ssh_public_key' "
+         "maxlength='4096' placeholder='Leave blank to keep the stored public "
+         "key unless replacing the private key'></textarea><label>Key "
+         "passphrase "
          "(optional)</label><input name='ssh_key_passphrase' type='password' "
          "placeholder='Leave blank to keep the stored passphrase'></div><h2>"
          "Reverse tunnel</h2><div class='grid'><div><label>Remote bind "
@@ -340,8 +399,8 @@ void sendDevicePage(const String &error = "") {
          "type='number' min='1' max='65535' value='");
   p += String(current->localPort);
   p += F("'></div></div><button>Save and start tunnel</button></form><p "
-         "class='note'>Stored passwords and private keys are never displayed. "
-         "Leave those fields empty to keep them unchanged.</p><script>function "
+         "class='note'>Stored passwords and keys are never displayed. Leave "
+         "those fields empty to keep them unchanged.</p><script>function "
          "toggleAuth(){let k=document.getElementById('auth').value==='key';"
          "document.getElementById('password-fields').className=k?'hidden':'';"
          "document.getElementById('key-fields').className=k?'':'hidden'}"
@@ -385,6 +444,8 @@ bool startDevicePortalInternal() {
     const String submittedPassword = server->arg("ssh_password");
     String submittedKey = server->arg("ssh_private_key");
     submittedKey.replace("\r\n", "\n");
+    String submittedPublicKey = server->arg("ssh_public_key");
+    submittedPublicKey.replace("\r\n", "\n");
     const String submittedPassphrase = server->arg("ssh_key_passphrase");
     if (c.sshAuthMethod == SSHAuthMethod::Password) {
       if (!submittedPassword.isEmpty() ||
@@ -392,27 +453,34 @@ bool startDevicePortalInternal() {
         c.sshPassword = submittedPassword;
     } else if (!submittedKey.isEmpty()) {
       c.sshPrivateKey = submittedKey;
+      // Never retain an old public key alongside a newly supplied private key.
+      c.sshPublicKey = submittedPublicKey;
       c.sshKeyPassphrase = submittedPassphrase;
-    } else if (storedAuthMethod == SSHAuthMethod::PrivateKey &&
-               !submittedPassphrase.isEmpty()) {
-      c.sshKeyPassphrase = submittedPassphrase;
+    } else if (storedAuthMethod == SSHAuthMethod::PrivateKey) {
+      if (!submittedPublicKey.isEmpty())
+        c.sshPublicKey = submittedPublicKey;
+      if (!submittedPassphrase.isEmpty())
+        c.sshKeyPassphrase = submittedPassphrase;
     }
     c.setupComplete = true;
     if (!validDeviceConfig(c)) {
       sendDevicePage(c.sshAuthMethod == SSHAuthMethod::PrivateKey
-                         ? "Enter a valid PEM or OpenSSH private key."
+                         ? "Enter a valid private key and optional OpenSSH "
+                           "public-key line."
                          : "Complete all fields and enter an SSH password.");
       return;
     }
     if (c.sshAuthMethod == SSHAuthMethod::PrivateKey) {
-      if (!saveKey(c.sshPrivateKey)) {
-        sendDevicePage("The private key could not be stored.");
+      if (!saveKeys(c.sshPrivateKey, c.sshPublicKey)) {
+        sendDevicePage("The SSH keys could not be stored.");
         return;
       }
       c.sshPassword = "";
     } else {
       LittleFS.remove(KEY_PATH);
       c.sshPrivateKey = "";
+      LittleFS.remove(PUBLIC_KEY_PATH);
+      c.sshPublicKey = "";
       c.sshKeyPassphrase = "";
     }
     if (!writeConfig(c)) {
@@ -580,6 +648,8 @@ void pollConfigResetButton() {
   LittleFS.remove(CONFIG_TEMP);
   LittleFS.remove(KEY_PATH);
   LittleFS.remove(KEY_TEMP);
+  LittleFS.remove(PUBLIC_KEY_PATH);
+  LittleFS.remove(PUBLIC_KEY_TEMP);
   LittleFS.remove(EDIT_REQUEST_PATH);
   delay(250);
   ESP.restart();

@@ -13,20 +13,23 @@ for WiFi networks and tests the entered credentials. It then closes the open
 network and automatically tries to continue on the selected WiFi network.
 
 The temporary second page configures password or private-key SSH
-authentication and one reverse tunnel. Saving restarts the board. Neither web
-server runs during normal tunnel operation. Credentials are stored as plain
-text in LittleFS and must be protected accordingly.
+authentication and one reverse tunnel. ECDSA authentication also requires the
+matching OpenSSH public-key line because the bundled mbedTLS backend cannot
+derive it from the private key. Saving restarts the board. Neither web server
+runs during normal tunnel operation. Credentials are stored as plain text in
+LittleFS and must be protected accordingly.
 
 To edit the tunnel configuration without losing WiFi or SSH credentials, press
 **BOOT** three times within two seconds. The firmware restarts, reconnects to
 WiFi, and opens the tunnel setup page at the IP address in the serial log.
-Hidden password and private-key fields keep their stored values when left
-empty.
+Hidden password and key fields keep their stored values when left empty. When
+replacing a private key, submit its matching public key in the same form to
+avoid retaining a mismatched key pair.
 
 For a complete reset, leave the device running and hold **BOOT** for four
 seconds without pressing RESET. The firmware removes the saved configuration
-and private key and restarts the first-boot portal. The configured button pin
-is GPIO 0 on the LOLIN S2 Mini and GPIO 9 on the ESP32-C3 target.
+and private/public key pair and restarts the first-boot portal. The configured
+button pin is GPIO 0 on the LOLIN S2 Mini and GPIO 9 on the ESP32-C3 target.
 
 ## WEMOS LOLIN S2 Mini
 

@@ -13,6 +13,7 @@ struct DeviceRuntimeConfig {
   SSHAuthMethod sshAuthMethod = SSHAuthMethod::Password;
   String sshPassword;
   String sshPrivateKey;
+  String sshPublicKey;
   String sshKeyPassphrase;
   String remoteBindHost = "127.0.0.1";
   int remoteBindPort = 23180;

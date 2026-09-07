@@ -194,8 +194,10 @@ void configureSSHTunnel() {
   if (deviceConfig.sshAuthMethod == SSHAuthMethod::PrivateKey) {
     globalSSHConfig.setSSHKeyAuthFromMemory(
         deviceConfig.sshHost, deviceConfig.sshPort, deviceConfig.sshUsername,
-        deviceConfig.sshPrivateKey, "", deviceConfig.sshKeyPassphrase);
+        deviceConfig.sshPrivateKey, deviceConfig.sshPublicKey,
+        deviceConfig.sshKeyPassphrase);
     deviceConfig.sshPrivateKey = "";
+    deviceConfig.sshPublicKey = "";
   } else {
     globalSSHConfig.setSSHServer(deviceConfig.sshHost, deviceConfig.sshPort,
                                  deviceConfig.sshUsername,
