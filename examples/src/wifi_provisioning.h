@@ -25,10 +25,6 @@ struct DeviceRuntimeConfig {
 namespace wifi_provisioning {
 bool begin(DeviceRuntimeConfig &config);
 bool startDeviceSetup(DeviceRuntimeConfig &config);
-// Starts the WiFi captive portal while preserving an existing complete tunnel
-// configuration. Used after a 3-click edit request when stored WiFi is no
-// longer reachable.
-bool startWifiEditFallback(DeviceRuntimeConfig &config);
 // Persists managed tunnel fields without replacing the separately stored key
 // pair. The caller updates config only after validating the new runtime.
 bool saveManagedConfig(const DeviceRuntimeConfig &config);
