@@ -88,17 +88,34 @@ code --install-extension pioarduino.pioarduino-ide
 ```
 
 Open a PowerShell terminal in the repository root. Do not use an old `C:\pio`
-executable. The following repository script locates the PIOArduino user Core at
-`%USERPROFILE%\.platformio`, repairs the incorrectly nested Windows RISC-V
-toolchain layout encountered during ESP32-C3 builds, and performs a clean
-build:
+executable. The repository build script locates the PIOArduino user Core at
+`%USERPROFILE%\.platformio`, repairs an incorrectly nested Windows RISC-V
+toolchain layout in both the installed package and PIOArduino's cached local
+tool source, installs a missing ESP32-C3 toolchain package when necessary, and
+performs a clean build:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\build-esp32-c3-windows.ps1 -Clean
 ```
 
-The script deliberately does not flash. If it cannot repair the environment,
-create a diagnostic report with:
+Before building, the repair step also asks GCC which `libstdc++.a` it would use
+for `rv32imc_zicsr_zifencei` / `ilp32`. It stops if GCC selects the generic
+fallback library instead of the ESP32-C3-specific multilib. This check protects
+against a malformed toolchain layout that can compile and link successfully but
+produce firmware that traps with an illegal instruction at runtime.
+
+If the script reports that the C3 multilib is invalid, close running PlatformIO
+processes, remove both local copies of the RISC-V toolchain, and rerun the build
+script so PIOArduino can download a clean copy:
+
+```powershell
+Remove-Item "$env:USERPROFILE\.platformio\packages\toolchain-riscv32-esp" -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item "$env:USERPROFILE\.platformio\tools\toolchain-riscv32-esp" -Recurse -Force -ErrorAction SilentlyContinue
+powershell -ExecutionPolicy Bypass -File .\tools\build-esp32-c3-windows.ps1 -Clean
+```
+
+The build script deliberately does not flash. If it cannot repair the
+environment, create a diagnostic report with:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\diagnose-platformio.ps1
@@ -250,10 +267,6 @@ void setup() {
 
   tunnel.init();
   tunnel.connectSSH();
-}
-
-void loop() {
-  tunnel.loop();
 }
 ```
 
