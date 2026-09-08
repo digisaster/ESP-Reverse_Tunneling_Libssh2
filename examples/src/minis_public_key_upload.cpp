@@ -17,7 +17,8 @@ bool writeAll(WiFiClientSecure &client, const String &data) {
   size_t remaining = data.length();
   while (remaining > 0) {
     const size_t written = client.write(ptr, remaining);
-    if (written == 0) return false;
+    if (written == 0)
+      return false;
     ptr += written;
     remaining -= written;
   }
@@ -42,13 +43,21 @@ bool upload(const String &publicKey) {
   const String sid = minis_registration::sid();
   String body;
   body.reserve(key.length() + 512);
-  body += "--" BOUNDARY "\r\nContent-Disposition: form-data; name=\"sid\"\r\n\r\n";
+  body += "--";
+  body += BOUNDARY;
+  body += "\r\nContent-Disposition: form-data; name=\"sid\"\r\n\r\n";
   body += sid;
-  body += "\r\n--" BOUNDARY "\r\nContent-Disposition: form-data; name=\"dest\"\r\n\r\nui";
-  body += "\r\n--" BOUNDARY "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"ssh_public_key.txt\"\r\n";
+  body += "\r\n--";
+  body += BOUNDARY;
+  body += "\r\nContent-Disposition: form-data; name=\"dest\"\r\n\r\nui";
+  body += "\r\n--";
+  body += BOUNDARY;
+  body += "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"ssh_public_key.txt\"\r\n";
   body += "Content-Type: text/plain\r\n\r\n";
   body += key;
-  body += "\r\n--" BOUNDARY "--\r\n";
+  body += "\r\n--";
+  body += BOUNDARY;
+  body += "--\r\n";
 
   WiFiClientSecure client;
   // Matches the current Minis POC transport. Do not use this channel for
@@ -62,11 +71,18 @@ bool upload(const String &publicKey) {
 
   String headers;
   headers.reserve(320);
-  headers += "POST " PATH " HTTP/1.1\r\nHost: " HOST "\r\n";
+  headers += "POST ";
+  headers += PATH;
+  headers += " HTTP/1.1\r\nHost: ";
+  headers += HOST;
+  headers += "\r\n";
   headers += "User-Agent: MHB;ESP32;publickey\r\n";
-  headers += "Content-Type: multipart/form-data; boundary=" BOUNDARY "\r\n";
-  headers += "Content-Length: " + String(body.length()) + "\r\n";
-  headers += "Connection: close\r\n\r\n";
+  headers += "Content-Type: multipart/form-data; boundary=";
+  headers += BOUNDARY;
+  headers += "\r\n";
+  headers += "Content-Length: ";
+  headers += String(body.length());
+  headers += "\r\nConnection: close\r\n\r\n";
 
   if (!writeAll(client, headers) || !writeAll(client, body)) {
     LOG_W("MINIS", "Public key upload failed while sending request");
@@ -75,8 +91,10 @@ bool upload(const String &publicKey) {
   }
 
   const unsigned long deadline = millis() + 10000;
-  while (!client.available() && client.connected() && static_cast<long>(deadline - millis()) > 0)
+  while (!client.available() && client.connected() &&
+         static_cast<long>(deadline - millis()) > 0) {
     delay(10);
+  }
   if (!client.available()) {
     LOG_W("MINIS", "Public key upload failed: no HTTP response");
     client.stop();
@@ -85,10 +103,13 @@ bool upload(const String &publicKey) {
 
   const String statusLine = client.readStringUntil('\n');
   const bool ok = statusLine.indexOf(" 200 ") >= 0;
-  if (ok)
-    LOGF_I("MINIS", "Public key uploaded for SID %s -> ui/ssh_public_key.txt", sid.c_str());
-  else
-    LOGF_W("MINIS", "Public key upload HTTP failure: %s", statusLine.c_str());
+  if (ok) {
+    LOGF_I("MINIS", "Public key uploaded for SID %s -> ui/ssh_public_key.txt",
+           sid.c_str());
+  } else {
+    LOGF_W("MINIS", "Public key upload HTTP failure: %s",
+           statusLine.c_str());
+  }
   client.stop();
   return ok;
 }
