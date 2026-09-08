@@ -33,14 +33,12 @@ static constexpr int TUNNEL_MAX_CHANNELS = 5;
 static constexpr size_t TUNNEL_RING_BUFFER_SIZE = 64 * 1024;
 #endif
 
-// SSH tunnel instance
 SSHTunnel tunnel;
 DeviceRuntimeConfig deviceConfig;
 bool tunnelRuntimeReady = false;
 
-// Monitoring variables
 unsigned long lastStatsReport = 0;
-const unsigned long STATS_INTERVAL = 10000; // 10 seconds
+const unsigned long STATS_INTERVAL = 10000;
 
 void connectWiFi();
 void reportStats();
@@ -49,8 +47,6 @@ void applyPendingMinisConfig();
 void configureMultiTunnelMappings();
 void registerTunnelCallbacks();
 const char *closeReasonToString(ChannelCloseReason reason);
-
-// Simple event handlers to showcase the callback surface
 void onSessionConnected();
 void onSessionDisconnected();
 void onChannelOpened(int channel);
@@ -65,9 +61,7 @@ void setup() {
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 
-  LOG_I(
-      "MAIN",
-      "ESP32 SSH Reverse Tunnel - Enhanced version with dynamic configuration");
+  LOG_I("MAIN", "ESP32 SSH Reverse Tunnel - Enhanced version with dynamic configuration");
 #if SSH_TUNNEL_LOW_MEMORY_PROFILE
   LOG_I("MAIN", "Low-memory tunnel profile enabled");
 #endif
@@ -84,17 +78,23 @@ void setup() {
     return;
   }
 
-  // WiFi connection
   status_led::set(status_led::State::Connecting);
   connectWiFi();
   if (WiFi.status() != WL_CONNECTED) {
+    if (wifi_provisioning::editRequested()) {
+      LOG_W("MAIN", "Stored WiFi unavailable during edit request; opening WiFi setup fallback");
+      status_led::set(status_led::State::Setup);
+      if (!wifi_provisioning::startWifiEditFallback(deviceConfig)) {
+        status_led::set(status_led::State::Error);
+        LOG_E("MAIN", "Unable to start WiFi edit fallback portal");
+      }
+      return;
+    }
     status_led::set(status_led::State::Error);
     LOG_E("MAIN", "WiFi is unavailable; tunnel startup is paused");
     return;
   }
 
-  // Minimal Minis bootstrap. Failure is deliberately non-fatal so remote
-  // tunnel startup keeps working even when the Minis endpoint is unavailable.
   if (!minis_registration::registerClient()) {
     LOG_W("MAIN", "Minis registration attempt did not complete");
   }
@@ -111,10 +111,7 @@ void setup() {
     return;
   }
 
-  // SSH tunnel configuration
   configureSSHTunnel();
-
-  // SSH tunnel initialization
   if (!tunnel.init()) {
     status_led::set(status_led::State::Error);
     LOG_E("MAIN", "Failed to initialize SSH tunnel");
@@ -122,7 +119,6 @@ void setup() {
   }
   tunnelRuntimeReady = true;
 
-  // Start SSH connection unless Minis previously disabled it.
   if (!deviceConfig.tunnelEnabled) {
     status_led::set(status_led::State::Disabled);
     LOG_I("MAIN", "Tunnel is disabled by stored managed configuration");
@@ -148,21 +144,14 @@ void loop() {
     return;
   }
 
-  // Check WiFi connection
   if (WiFi.status() != WL_CONNECTED) {
     LOG_W("MAIN", "WiFi disconnected, reconnecting...");
     connectWiFi();
   }
 
   applyPendingMinisConfig();
-
-  // SSH tunnel processing
   tunnel.loop();
-
-  // Statistics report
   reportStats();
-
-  // Use vTaskDelay instead of delay for better FreeRTOS compatibility
   vTaskDelay(pdMS_TO_TICKS(1));
 }
 
@@ -177,6 +166,10 @@ void connectWiFi() {
     const unsigned long waitStarted = millis();
     while (millis() - waitStarted < 1000) {
       status_led::update();
+      // BOOT must remain responsive while a missing AP keeps WiFi.begin()
+      // waiting. In particular, the 4-second factory reset is expected to
+      // work during this phase rather than only after the 30-second timeout.
+      wifi_provisioning::pollConfigResetButton();
       vTaskDelay(pdMS_TO_TICKS(20));
     }
     Serial.print(".");
@@ -198,109 +191,46 @@ void configureSSHTunnel() {
   LOG_I("CONFIG", "Configuring SSH tunnel...");
 
   if (deviceConfig.sshAuthMethod == SSHAuthMethod::PrivateKey) {
-    globalSSHConfig.setSSHKeyAuthFromMemory(
-        deviceConfig.sshHost, deviceConfig.sshPort, deviceConfig.sshUsername,
-        deviceConfig.sshPrivateKey, deviceConfig.sshPublicKey,
-        deviceConfig.sshKeyPassphrase);
+    globalSSHConfig.setSSHKeyAuthFromMemory(deviceConfig.sshHost, deviceConfig.sshPort,
+        deviceConfig.sshUsername, deviceConfig.sshPrivateKey,
+        deviceConfig.sshPublicKey, deviceConfig.sshKeyPassphrase);
     deviceConfig.sshPrivateKey = "";
     deviceConfig.sshPublicKey = "";
   } else {
     globalSSHConfig.setSSHServer(deviceConfig.sshHost, deviceConfig.sshPort,
-                                 deviceConfig.sshUsername,
-                                 deviceConfig.sshPassword);
+                                 deviceConfig.sshUsername, deviceConfig.sshPassword);
     deviceConfig.sshPassword = "";
   }
-
-  // ===== METHOD 2: SSH configuration with key from LittleFS =====
-  // This method automatically loads keys from LittleFS into memory
-  // globalSSHConfig.setSSHKeyAuth(
-  //   "your-remote-server.com",
-  //   22,
-  //   "your_username",
-  //   "/ssh_key",       // Path to private key in LittleFS
-  //   ""                // Passphrase for the key (optional)
-  // );
-
-  // ===== METHOD 3: SSH configuration with keys directly in memory =====
-  // Example RSA private/public key placeholders (DO NOT USE IN PRODUCTION)
-  /*
-  String privateKey = "PLACEHOLDER_PRIVATE_KEY_EXAMPLE_DO_NOT_USE";
-  String publicKey  = "ssh-rsa PLACEHOLDER_PUBLIC_KEY_EXAMPLE_DO_NOT_USE
-  user@host"; // Minimal illustrative form
-  globalSSHConfig.setSSHKeyAuthFromMemory(
-    "your-remote-server.com",
-    22,
-    "your_username",
-    privateKey,
-    publicKey,
-    ""  // Passphrase for the key (optional)
-  );
-  */
-
-  // ===== METHOD 4: Load keys from LittleFS then use them in memory =====
-  // Initialize LittleFS if not already done
-  // if (!LittleFS.begin(true)) {
-  //   LOG_E("CONFIG", "Failed to initialize LittleFS");
-  //   return;
-  // }
-
-  // Manually load keys from LittleFS
-  // if (globalSSHConfig.loadSSHKeysFromLittleFS("/ssh_key")) {
-  //   LOG_I("CONFIG", "SSH keys loaded from LittleFS and stored in memory");
-  // } else {
-  //   LOG_E("CONFIG", "Failed to load SSH keys from LittleFS");
-  // }
 
   if (ENABLE_MULTI_TUNNEL_DEMO) {
     configureMultiTunnelMappings();
   } else {
-    globalSSHConfig.setTunnelConfig(
-        deviceConfig.remoteBindHost, deviceConfig.remoteBindPort,
-        deviceConfig.localHost, deviceConfig.localPort);
+    globalSSHConfig.setTunnelConfig(deviceConfig.remoteBindHost,
+        deviceConfig.remoteBindPort, deviceConfig.localHost, deviceConfig.localPort);
   }
-
 #if SSH_TUNNEL_LOW_MEMORY_PROFILE
   globalSSHConfig.setMaxReverseListeners(1);
 #endif
-
-  // Connection configuration
-  globalSSHConfig.setConnectionConfig(30,   // Keep-alive interval (seconds)
-                                      5000, // Reconnection delay (ms)
-                                      5,    // Max reconnection attempts
-                                      30    // Connection timeout (seconds)
-  );
-
-  // Buffer configuration
+  globalSSHConfig.setConnectionConfig(30, 5000, 5, 30);
   globalSSHConfig.setBufferConfig(TUNNEL_TRANSPORT_BUFFER_SIZE,
-                                  TUNNEL_MAX_CHANNELS,
-                                  1800000, // Channel timeout: 30 minutes
+                                  TUNNEL_MAX_CHANNELS, 1800000,
                                   TUNNEL_RING_BUFFER_SIZE);
-
-  // Debug configuration
-  globalSSHConfig.setDebugConfig(true,  // Debug enabled
-                                 115200 // Serial baud rate
-  );
-
+  globalSSHConfig.setDebugConfig(true, 115200);
   registerTunnelCallbacks();
   LOG_I("CONFIG", "Configuration complete");
 }
 
 void applyPendingMinisConfig() {
   minis_registration::ManagedTunnelConfig managed;
-  if (!minis_registration::takeManagedTunnelConfig(managed)) {
-    return;
-  }
+  if (!minis_registration::takeManagedTunnelConfig(managed)) return;
 
   const String managedUsername = minis_registration::sid();
-  const bool alreadyActive =
-      deviceConfig.tunnelEnabled == managed.enabled &&
-      deviceConfig.sshHost == managed.sshHost &&
-      deviceConfig.sshPort == managed.sshPort &&
+  const bool alreadyActive = deviceConfig.tunnelEnabled == managed.enabled &&
+      deviceConfig.sshHost == managed.sshHost && deviceConfig.sshPort == managed.sshPort &&
       deviceConfig.sshUsername == managedUsername &&
       deviceConfig.remoteBindHost == managed.remoteBindHost &&
       deviceConfig.remoteBindPort == managed.remoteBindPort &&
-      deviceConfig.localHost == managed.localHost &&
-      deviceConfig.localPort == managed.localPort;
+      deviceConfig.localHost == managed.localHost && deviceConfig.localPort == managed.localPort;
   if (alreadyActive) {
     LOG_I("MINIS", "Managed tunnel config is already active");
     return;
@@ -309,9 +239,7 @@ void applyPendingMinisConfig() {
   const SSHServerConfig previousSsh = globalSSHConfig.getSSHConfig();
   const TunnelConfig previousTunnel = globalSSHConfig.getTunnelConfig();
   if (!previousSsh.useSSHKey || previousSsh.privateKeyData.isEmpty()) {
-    LOG_W("MINIS",
-          "Managed tunnel config rejected: a locally stored private key is "
-          "required");
+    LOG_W("MINIS", "Managed tunnel config rejected: a locally stored private key is required");
     return;
   }
 
@@ -325,19 +253,15 @@ void applyPendingMinisConfig() {
   next.localHost = managed.localHost;
   next.localPort = managed.localPort;
 
-  LOGF_I("MINIS",
-         "Applying managed tunnel config: enabled=%s ssh=%s@%s:%u "
-         "remote=%s:%u local=%s:%u",
-         next.tunnelEnabled ? "yes" : "no", next.sshUsername.c_str(),
-         next.sshHost.c_str(), static_cast<unsigned int>(next.sshPort),
-         next.remoteBindHost.c_str(),
+  LOGF_I("MINIS", "Applying managed tunnel config: enabled=%s ssh=%s@%s:%u remote=%s:%u local=%s:%u",
+         next.tunnelEnabled ? "yes" : "no", next.sshUsername.c_str(), next.sshHost.c_str(),
+         static_cast<unsigned int>(next.sshPort), next.remoteBindHost.c_str(),
          static_cast<unsigned int>(next.remoteBindPort), next.localHost.c_str(),
          static_cast<unsigned int>(next.localPort));
 
   tunnel.disconnect();
-  globalSSHConfig.setSSHKeyAuthFromMemory(
-      next.sshHost, next.sshPort, next.sshUsername,
-      previousSsh.privateKeyData, previousSsh.publicKeyData,
+  globalSSHConfig.setSSHKeyAuthFromMemory(next.sshHost, next.sshPort,
+      next.sshUsername, previousSsh.privateKeyData, previousSsh.publicKeyData,
       previousSsh.password);
   globalSSHConfig.setTunnelConfig(next.remoteBindHost, next.remoteBindPort,
                                   next.localHost, next.localPort);
@@ -350,57 +274,41 @@ void applyPendingMinisConfig() {
 
   if (activated && wifi_provisioning::saveManagedConfig(next)) {
     deviceConfig = next;
-    if (next.tunnelEnabled) {
-      LOG_I("MINIS", "Managed tunnel config activated and stored");
-    } else {
+    if (next.tunnelEnabled) LOG_I("MINIS", "Managed tunnel config activated and stored");
+    else {
       status_led::set(status_led::State::Disabled);
       LOG_I("MINIS", "Managed tunnel disabled and configuration stored");
     }
     return;
   }
 
-  if (activated) {
-    LOG_E("MINIS", "Unable to store managed tunnel config; rolling back");
-  } else {
-    LOG_W("MINIS", "Managed tunnel activation failed; rolling back");
-  }
+  if (activated) LOG_E("MINIS", "Unable to store managed tunnel config; rolling back");
+  else LOG_W("MINIS", "Managed tunnel activation failed; rolling back");
 
   tunnel.disconnect();
-  globalSSHConfig.setSSHKeyAuthFromMemory(
-      previousSsh.host, previousSsh.port, previousSsh.username,
-      previousSsh.privateKeyData, previousSsh.publicKeyData,
+  globalSSHConfig.setSSHKeyAuthFromMemory(previousSsh.host, previousSsh.port,
+      previousSsh.username, previousSsh.privateKeyData, previousSsh.publicKeyData,
       previousSsh.password);
-  globalSSHConfig.setTunnelConfig(
-      previousTunnel.remoteBindHost, previousTunnel.remoteBindPort,
-      previousTunnel.localHost, previousTunnel.localPort);
+  globalSSHConfig.setTunnelConfig(previousTunnel.remoteBindHost,
+      previousTunnel.remoteBindPort, previousTunnel.localHost, previousTunnel.localPort);
 
   if (deviceConfig.tunnelEnabled) {
     status_led::set(status_led::State::Connecting);
-    if (tunnel.connectSSH()) {
-      LOG_I("MINIS", "Previous tunnel configuration restored");
-    } else {
+    if (tunnel.connectSSH()) LOG_I("MINIS", "Previous tunnel configuration restored");
+    else {
       status_led::set(status_led::State::Error);
       LOG_E("MINIS", "Previous tunnel configuration could not reconnect");
     }
-  } else {
-    status_led::set(status_led::State::Disabled);
-  }
+  } else status_led::set(status_led::State::Disabled);
 }
 
 void configureMultiTunnelMappings() {
   LOG_I("CONFIG", "Configuring multi-tunnel demo mappings");
-
   globalSSHConfig.clearTunnelMappings();
   globalSSHConfig.setMaxReverseListeners(3);
-
-  globalSSHConfig.addTunnelMapping("127.0.0.1", 22080,   // Remote listener #1
-                                   "192.168.1.100", 80); // HTTP cam
-
-  globalSSHConfig.addTunnelMapping("127.0.0.1", 22081,    // Remote listener #2
-                                   "192.168.1.150", 502); // Modbus TCP
-
-  globalSSHConfig.addTunnelMapping("127.0.0.1", 22082,   // Localhost bind
-                                   "192.168.1.200", 22); // SSH hop
+  globalSSHConfig.addTunnelMapping("127.0.0.1", 22080, "192.168.1.100", 80);
+  globalSSHConfig.addTunnelMapping("127.0.0.1", 22081, "192.168.1.150", 502);
+  globalSSHConfig.addTunnelMapping("127.0.0.1", 22082, "192.168.1.200", 22);
 }
 
 void registerTunnelCallbacks() {
@@ -415,105 +323,53 @@ void registerTunnelCallbacks() {
 
 void reportStats() {
   unsigned long now = millis();
-  if (now - lastStatsReport < STATS_INTERVAL) {
-    return;
-  }
-
+  if (now - lastStatsReport < STATS_INTERVAL) return;
   lastStatsReport = now;
-
-  // Check heap state BEFORE logs
   size_t freeHeap = ESP.getFreeHeap();
   size_t minFreeHeap = ESP.getMinFreeHeap();
   size_t largestFreeBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-
-  // Status report with memory verification
-  if (freeHeap > 10000) { // Only if we have enough memory
+  if (freeHeap > 10000) {
     LOGF_I("STATS", "Tunnel State: %s", tunnel.getStateString().c_str());
     LOGF_I("STATS", "Active Channels: %d", tunnel.getActiveChannels());
     LOGF_I("STATS", "Bytes Sent: %lu", tunnel.getBytesSent());
     LOGF_I("STATS", "Bytes Received: %lu", tunnel.getBytesReceived());
     LOGF_I("STATS", "Bytes Dropped: %lu", tunnel.getBytesDropped());
   }
-
-  // Throughput calculation (approximate)
   static unsigned long lastBytesSent = 0;
   static unsigned long lastBytesReceived = 0;
-
   unsigned long bytesSent = tunnel.getBytesSent();
   unsigned long bytesReceived = tunnel.getBytesReceived();
-  unsigned long bytesDropped = tunnel.getBytesDropped();
-
   unsigned long sentRate = (bytesSent - lastBytesSent) * 1000 / STATS_INTERVAL;
-  unsigned long receivedRate =
-      (bytesReceived - lastBytesReceived) * 1000 / STATS_INTERVAL;
-
-  if (freeHeap > 8000) { // Reduce logs if low memory
+  unsigned long receivedRate = (bytesReceived - lastBytesReceived) * 1000 / STATS_INTERVAL;
+  if (freeHeap > 8000) {
     LOGF_I("STATS", "Send Rate: %lu B/s", sentRate);
     LOGF_I("STATS", "Receive Rate: %lu B/s", receivedRate);
   }
-
   lastBytesSent = bytesSent;
   lastBytesReceived = bytesReceived;
-
-  // WiFi info (essential)
   LOGF_I("WIFI", "RSSI: %d dBm", WiFi.RSSI());
-
-  // Memory info (critical)
   LOGF_I("SYSTEM", "Free Heap: %d bytes (min: %d, largest: %d)", freeHeap,
          minFreeHeap, largestFreeBlock);
   LOGF_I("SYSTEM", "Uptime: %lu seconds", millis() / 1000);
-
-  // Alert only when the remaining internal heap is genuinely critical. A
-  // healthy ESP32-C3 can normally operate below the previous fixed 50KB
-  // threshold.
-  if (freeHeap < CRITICAL_FREE_HEAP_BYTES) {
+  if (freeHeap < CRITICAL_FREE_HEAP_BYTES)
     LOGF_W("MEMORY", "Critical free heap: %u bytes", (unsigned)freeHeap);
-  }
-
-  if (freeHeap >= CRITICAL_FREE_HEAP_BYTES &&
-      largestFreeBlock < CRITICAL_LARGEST_BLOCK_BYTES) {
-    LOGF_W("MEMORY", "Critical heap fragmentation: largest block %u bytes",
-           (unsigned)largestFreeBlock);
-  }
+  if (freeHeap >= CRITICAL_FREE_HEAP_BYTES && largestFreeBlock < CRITICAL_LARGEST_BLOCK_BYTES)
+    LOGF_W("MEMORY", "Critical heap fragmentation: largest block %u bytes", (unsigned)largestFreeBlock);
 }
 
 const char *closeReasonToString(ChannelCloseReason reason) {
   switch (reason) {
-  case ChannelCloseReason::RemoteClosed:
-    return "RemoteClosed";
-  case ChannelCloseReason::LocalClosed:
-    return "LocalClosed";
-  case ChannelCloseReason::Error:
-    return "Error";
-  case ChannelCloseReason::Timeout:
-    return "Timeout";
-  case ChannelCloseReason::Manual:
-    return "Manual";
-  default:
-    return "Unknown";
+  case ChannelCloseReason::RemoteClosed: return "RemoteClosed";
+  case ChannelCloseReason::LocalClosed: return "LocalClosed";
+  case ChannelCloseReason::Error: return "Error";
+  case ChannelCloseReason::Timeout: return "Timeout";
+  case ChannelCloseReason::Manual: return "Manual";
+  default: return "Unknown";
   }
 }
 
-void onSessionConnected() {
-  status_led::set(status_led::State::Connected);
-  LOG_I("CALLBACK", "SSH session established");
-}
-
-void onSessionDisconnected() {
-  status_led::set(status_led::State::Error);
-  LOG_I("CALLBACK", "SSH session disconnected");
-}
-
-void onChannelOpened(int channel) {
-  LOGF_I("CALLBACK", "Channel %d opened", channel);
-}
-
-void onChannelClosed(int channel, ChannelCloseReason reason) {
-  LOGF_I("CALLBACK", "Channel %d closed (%s)", channel,
-         closeReasonToString(reason));
-}
-
-void onTunnelError(int code, const char *detail) {
-  status_led::set(status_led::State::Error);
-  LOGF_W("CALLBACK", "Tunnel error %d: %s", code, detail ? detail : "(none)");
-}
+void onSessionConnected() { status_led::set(status_led::State::Connected); LOG_I("CALLBACK", "SSH session established"); }
+void onSessionDisconnected() { status_led::set(status_led::State::Error); LOG_I("CALLBACK", "SSH session disconnected"); }
+void onChannelOpened(int channel) { LOGF_I("CALLBACK", "Channel %d opened", channel); }
+void onChannelClosed(int channel, ChannelCloseReason reason) { LOGF_I("CALLBACK", "Channel %d closed (%s)", channel, closeReasonToString(reason)); }
+void onTunnelError(int code, const char *detail) { status_led::set(status_led::State::Error); LOGF_W("CALLBACK", "Tunnel error %d: %s", code, detail ? detail : "(none)"); }
