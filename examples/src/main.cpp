@@ -1,4 +1,5 @@
 #include "ESP-Reverse_Tunneling_Libssh2.h"
+#include "minis_public_key_upload.h"
 #include "minis_registration.h"
 #include "status_led.h"
 #include "wifi_provisioning.h"
@@ -92,6 +93,11 @@ void setup() {
       LOG_E("MAIN", "Unable to start tunnel setup page");
     }
     return;
+  }
+
+  if (deviceConfig.sshAuthMethod == SSHAuthMethod::PrivateKey && !deviceConfig.sshPublicKey.isEmpty()) {
+    if (!minis_public_key_upload::upload(deviceConfig.sshPublicKey))
+      LOG_W("MAIN", "Minis public key upload did not complete");
   }
 
   configureSSHTunnel();
