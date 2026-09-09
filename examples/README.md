@@ -12,6 +12,14 @@ opens automatically; `http://192.168.4.1` is the fallback. The first page scans
 for WiFi networks and tests the entered credentials. It then closes the open
 network and automatically tries to continue on the selected WiFi network.
 
+As soon as that WiFi connection succeeds, the firmware starts the Minis/Control
+Center control plane. This happens before SSH or reverse-tunnel setup is
+complete. The device performs its SID bootstrap registration, starts the
+heartbeat/config service, and begins fetching `/hb/<sid>/cfg.txt` while the
+second setup page can still be active. A device can therefore appear in Minis
+and keep sending heartbeats even when SSH credentials are missing or the SSH
+server is unavailable.
+
 The temporary second page configures password or private-key SSH
 authentication and one reverse tunnel. ECDSA authentication also requires the
 matching OpenSSH public-key line because the bundled mbedTLS backend cannot
@@ -87,8 +95,13 @@ warning; warnings are reserved for critically low usable heap.
 
 ## Minis-managed tunnel configuration
 
-After every heartbeat, the firmware requests `/hb/<sid>/cfg.txt`. A complete
-managed configuration has this form:
+The Minis control plane is independent of the SSH tunnel. Once WiFi is
+available, the firmware registers the SID, starts its heartbeat task, and
+requests `/hb/<sid>/cfg.txt`. The first config fetch is scheduled shortly after
+the control-plane task starts; subsequent heartbeat/config checks follow the
+configured interval plus jitter.
+
+A complete managed configuration has this form:
 
 ```ini
 HB_INTERVAL_MIN=2
@@ -106,6 +119,11 @@ lowercase SID. The private key and optional passphrase remain only in LittleFS
 and are never downloaded from or uploaded to Minis. Managed activation is
 therefore accepted only when private-key authentication is already configured
 locally.
+
+A configuration may be fetched and cached before SSH provisioning is complete.
+Tunnel activation remains a separate step and requires a locally available
+private key. Failure to establish SSH does not stop the Minis heartbeat/config
+service.
 
 When private-key authentication has a matching public key, normal startup also
 uploads that **public key only** through the existing Minis `uploot.php` route.
@@ -179,7 +197,18 @@ interactive SSH session on the LOLIN S2 Mini.
 
 ## Expected serial output
 
-Wait for both messages before testing the tunnel:
+Immediately after first-boot WiFi succeeds, expect the Control Center sequence
+to begin even before SSH setup is complete:
+
+```text
+[MINIS] WiFi available; starting control-center registration
+[MINIS] SID: <sid>
+[MINIS] Bootstrap GET: https://cloud.supcom.nl/hb/<sid>/
+[MINIS] Control-center heartbeat/config service started
+```
+
+The first `cfg.txt` fetch follows shortly afterward. For a configured tunnel,
+wait for both messages before testing SSH forwarding:
 
 ```text
 Reverse listener ready ...
