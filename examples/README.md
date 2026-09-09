@@ -21,15 +21,17 @@ LittleFS and must be protected accordingly.
 
 To edit the tunnel configuration without losing WiFi or SSH credentials, press
 **BOOT** three times within two seconds. The firmware restarts, reconnects to
-WiFi, and opens the tunnel setup page at the IP address in the serial log.
-Hidden password and key fields keep their stored values when left empty. When
-replacing a private key, submit its matching public key in the same form to
-avoid retaining a mismatched key pair.
+the stored WiFi network, and opens the tunnel setup page at the IP address in
+the serial log. Hidden password and key fields keep their stored values when
+left empty. This edit path requires the stored WiFi network to be reachable.
+When replacing a private key, submit its matching public key in the same form
+to avoid retaining a mismatched key pair.
 
-For a complete reset, leave the device running and hold **BOOT** for four
-seconds without pressing RESET. The firmware removes the saved configuration
-and private/public key pair and restarts the first-boot portal. The configured
-button pin is GPIO 0 on the LOLIN S2 Mini and GPIO 9 on the ESP32-C3 target.
+For a complete reset or recovery when the stored WiFi is no longer usable,
+leave the device running and hold **BOOT** for four seconds without pressing
+RESET. The firmware removes the saved configuration and private/public key pair
+and restarts the first-boot `esp32tun-XXXXXX` portal. The configured button pin
+is GPIO 0 on the LOLIN S2 Mini and GPIO 9 on the ESP32-C3 target.
 
 ## WEMOS LOLIN S2 Mini
 
@@ -100,9 +102,31 @@ LOCAL_PORT=22
 ```
 
 The SSH username is not supplied by `cfg.txt`; it is always the eight-character
-lowercase SID. The private/public key pair and optional passphrase remain in
-LittleFS and are never downloaded from Minis. Managed activation is therefore
-accepted only when private-key authentication is already configured locally.
+lowercase SID. The private key and optional passphrase remain only in LittleFS
+and are never downloaded from or uploaded to Minis. Managed activation is
+therefore accepted only when private-key authentication is already configured
+locally.
+
+When private-key authentication has a matching public key, normal startup also
+uploads that **public key only** through the existing Minis `uploot.php` route.
+It is stored as:
+
+```text
+/hb/<sid>/ui/ssh_public_key.txt
+```
+
+The upload uses `dest=ui`, so a later startup can replace the same public-key
+file. The private key never leaves the ESP32. A successful upload is logged as:
+
+```text
+[MINIS] Public key uploaded for SID <sid> -> ui/ssh_public_key.txt
+```
+
+Hardware validation on ESP32-C3 confirmed the complete flow with SID
+`48e6ebac`: the public key was uploaded, Minis supplied a managed configuration
+for `48e6ebac@edp.supcom.nl:443`, public-key authentication succeeded, and the
+managed reverse listener `127.0.0.1:23182 -> 192.168.19.10:22` was activated
+and stored.
 
 When a valid fetched configuration differs from the active settings, the
 firmware stops the current tunnel and tries the new SSH session and listener.
@@ -110,10 +134,17 @@ It stores the new settings only after activation succeeds. On failure it
 restores and reconnects the previous configuration. `TUNNEL_ENABLED=no`
 cleanly stops the tunnel while WiFi and the heartbeat service remain active.
 
-For this proof-of-concept the Minis HTTPS client still uses `setInsecure()`.
-The fields are strictly validated, but the response is not yet protected
-against an impersonated server. Certificate validation is required before
-production deployment.
+The heartbeat interval is supplied by `HB_INTERVAL_MIN`. Scheduling deliberately
+adds random jitter from zero up to the configured base interval, so the next
+check occurs between one and two times the base interval. This avoids many
+devices contacting Minis simultaneously.
+
+For this proof-of-concept the Minis HTTPS clients, including the public-key
+upload, still use `setInsecure()`. Traffic is encrypted but the remote TLS
+certificate is not authenticated. No private key is sent through this channel.
+Certificate validation is required before treating Minis transport as
+production-hardened. SSH host-key verification is also still disabled in the
+current reference firmware and remains a separate production-hardening item.
 
 ## Single and multiple tunnels
 
