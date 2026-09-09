@@ -19,6 +19,9 @@ constexpr char KEY_TEMP[] = "/esp32tun_ssh_key.tmp";
 constexpr char PUBLIC_KEY_PATH[] = "/esp32tun_ssh_key.pub";
 constexpr char PUBLIC_KEY_TEMP[] = "/esp32tun_ssh_key.pub.tmp";
 constexpr char EDIT_REQUEST_PATH[] = "/esp32tun.edit";
+constexpr char MINIS_CONFIG_PATH[] = "/minis.cfg";
+constexpr char MINIS_CONFIG_TEMP_PATH[] = "/minis.cfg.tmp";
+constexpr char MINIS_CONFIG_BACKUP_PATH[] = "/minis.cfg.bak";
 constexpr unsigned long WIFI_TIMEOUT_MS = 20000;
 constexpr size_t MAX_KEY_SIZE = 16384;
 constexpr size_t MAX_PUBLIC_KEY_SIZE = 4096;
@@ -691,6 +694,9 @@ void pollConfigResetButton() {
   removeIfExists(PUBLIC_KEY_PATH);
   removeIfExists(PUBLIC_KEY_TEMP);
   removeIfExists(EDIT_REQUEST_PATH);
+  removeIfExists(MINIS_CONFIG_PATH);
+  removeIfExists(MINIS_CONFIG_TEMP_PATH);
+  removeIfExists(MINIS_CONFIG_BACKUP_PATH);
   delay(250);
   ESP.restart();
 #endif
