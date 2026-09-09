@@ -13,6 +13,8 @@ beta baseline.
 The current reference target is a WEMOS LOLIN S2 Mini. It has been tested with
 Wi-Fi, password authentication, a reverse SSH listener, an interactive SSH
 channel, automatic reconnection, and a 45-minute uninterrupted idle session.
+The ESP32-C3 low-memory target additionally has a validated Minis-managed
+configuration and public-key registration flow.
 
 ## Installation
 
@@ -56,12 +58,13 @@ three times within two seconds. The ESP32 restarts, reconnects to the stored
 WiFi network, and opens the tunnel setup page at the IP address printed in the
 serial monitor. Existing values are filled in; stored passwords and private
 and public keys remain hidden and are retained when their fields are left
-empty.
+empty. This edit path requires the stored WiFi network to remain reachable.
 
-For a complete reset, leave the firmware running and hold **BOOT** for four
-seconds. Do not press RESET. This removes `/esp32tun.cfg`, the stored SSH key
-pair, and restarts the open first-boot portal. These actions are enabled
-on GPIO 0 for the LOLIN S2 Mini and GPIO 9 for the ESP32-C3 reference target.
+For a complete reset, or recovery when the stored WiFi is no longer usable,
+leave the firmware running and hold **BOOT** for four seconds. Do not press
+RESET. This removes `/esp32tun.cfg`, the stored SSH key pair, and restarts the
+open first-boot portal. These actions are enabled on GPIO 0 for the LOLIN S2
+Mini and GPIO 9 for the ESP32-C3 reference target.
 
 ## Build, flash, and monitor
 
@@ -136,7 +139,7 @@ DevKitM-1 compatible board without PSRAM. It intentionally allows one listener
 and one active forwarded channel, uses a 4 KB transport buffer, 8 KB per tunnel
 direction, and a 4 KB prepend buffer. Native USB CDC is enabled for boards that
 expose the ESP32-C3 USB-Serial/JTAG interface directly. The remote listener
-port is now selected explicitly on the tunnel setup page.
+port is selected explicitly on the tunnel setup page.
 
 ```powershell
 pio run -e esp32_c3_lowmem
@@ -154,6 +157,8 @@ Replace `COM9` with the detected port. Validation on the tested C3 covered:
 5. Zero dropped bytes and heap recovery after closing the channel.
 6. ECDSA P-256 authentication with an EC-PEM private key and matching public
    key, followed by reverse-listener creation.
+7. Minis heartbeat/config retrieval, public-key upload, SID-based SSH login,
+   managed listener activation, and persistence after successful activation.
 
 The tested profile is suitable as the ESP32-C3 reference configuration.
 Boards with a different flash layout or USB implementation may still need a
@@ -180,14 +185,44 @@ Do not publish LittleFS images or device backups containing credentials.
 The reference firmware checks `/hb/<sid>/cfg.txt` at startup and after each
 heartbeat. A complete configuration can enable or disable the tunnel and set
 `SSH_HOST`, `SSH_PORT`, `REMOTE_BIND_HOST`, `REMOTE_BIND_PORT`, `LOCAL_HOST`,
-and `LOCAL_PORT`. The SSH username is always the lowercase SID; no
-`SSH_USER` field is accepted.
+and `LOCAL_PORT`. The SSH username is always the lowercase eight-character SID;
+no `SSH_USER` field is accepted.
 
-The SSH key pair remains stored locally and is not delivered by Minis. A new
-managed configuration is stored only after its SSH session and reverse
+The **private key and passphrase remain local on the ESP32** and are never
+uploaded to or downloaded from Minis. When a matching public key is configured,
+the firmware uploads that public key during normal startup through the existing
+Minis upload endpoint and stores it as:
+
+```text
+/hb/<sid>/ui/ssh_public_key.txt
+```
+
+Only the public key is sent. A successful registration produces a serial log
+similar to:
+
+```text
+[MINIS] Public key uploaded for SID 48e6ebac -> ui/ssh_public_key.txt
+```
+
+A new managed configuration is stored only after its SSH session and reverse
 listener succeed. If activation fails, the firmware restores the previous
-runtime configuration. See the [example guide](examples/README.md) for the
-complete `cfg.txt` format and current proof-of-concept security boundary.
+runtime configuration. The validated ESP32-C3 proof of concept successfully
+used SID `48e6ebac` as the managed SSH username and activated
+`127.0.0.1:23182 -> 192.168.19.10:22` after public-key authentication.
+
+Heartbeat checks retain randomized scheduling jitter: the configured
+`HB_INTERVAL_MIN` is the base interval and a random delay from zero through the
+same base interval is added. This spreads device requests between one and two
+times the configured base interval.
+
+The current Minis HTTPS transport still uses `setInsecure()`: traffic is
+encrypted, but the server certificate is not authenticated. No private SSH key
+is sent through this channel. TLS certificate validation is required before
+production deployment. SSH host-key verification is also currently disabled
+and remains a separate production-hardening task.
+
+See the [example guide](examples/README.md) for the complete `cfg.txt` format,
+validated flow, and current proof-of-concept security boundary.
 
 ## Status LED
 
