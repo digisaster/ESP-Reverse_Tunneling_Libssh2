@@ -1,6 +1,7 @@
 #include "ESP-Reverse_Tunneling_Libssh2.h"
 #include "minis_public_key_upload.h"
 #include "minis_registration.h"
+#include "ssh_key_provisioning.h"
 #include "status_led.h"
 #include "wifi_provisioning.h"
 #include <Arduino.h>
@@ -40,6 +41,8 @@ bool tunnelRuntimeReady = false;
 bool minisBootstrapAttempted = false;
 bool minisHeartbeatStartAttempted = false;
 bool minisHeartbeatStarted = false;
+bool automaticIdentityAttempted = false;
+bool automaticPublicKeyUploadAttempted = false;
 unsigned long lastStatsReport = 0;
 const unsigned long STATS_INTERVAL = 10000;
 
@@ -100,7 +103,9 @@ void setup() {
   }
 
   if (deviceConfig.sshAuthMethod == SSHAuthMethod::PrivateKey &&
-      !deviceConfig.sshPublicKey.isEmpty()) {
+      !deviceConfig.sshPublicKey.isEmpty() &&
+      !automaticPublicKeyUploadAttempted) {
+    automaticPublicKeyUploadAttempted = true;
     if (!minis_public_key_upload::upload(deviceConfig.sshPublicKey))
       LOG_W("MAIN", "Minis public key upload did not complete");
   }
@@ -128,7 +133,8 @@ void loop() {
   if (wifi_provisioning::isActive()) {
     wifi_provisioning::loop();
     // As soon as first-boot WiFi provisioning succeeds, bring up the Minis
-    // control plane even while the device/tunnel setup page is still active.
+    // control plane and provision a local SSH identity while the device setup
+    // page is still active.
     ensureMinisControlPlane();
     return;
   }
@@ -193,6 +199,24 @@ void ensureMinisControlPlane() {
       LOG_I("MINIS", "Control-center heartbeat/config service started");
     else
       LOG_W("MAIN", "Minis heartbeat service could not be started");
+  }
+
+  // Preserve existing complete/manual configurations. Automatic identity
+  // provisioning is only part of first-time onboarding.
+  if (!deviceConfig.setupComplete && !automaticIdentityAttempted) {
+    automaticIdentityAttempted = true;
+    if (!ssh_key_provisioning::ensure(deviceConfig)) {
+      LOG_W("MAIN", "Automatic SSH identity provisioning did not complete");
+    }
+  }
+
+  if (!deviceConfig.setupComplete &&
+      deviceConfig.sshAuthMethod == SSHAuthMethod::PrivateKey &&
+      !deviceConfig.sshPublicKey.isEmpty() &&
+      !automaticPublicKeyUploadAttempted) {
+    automaticPublicKeyUploadAttempted = true;
+    if (!minis_public_key_upload::upload(deviceConfig.sshPublicKey))
+      LOG_W("MAIN", "Automatic Minis public key upload did not complete");
   }
 }
 
