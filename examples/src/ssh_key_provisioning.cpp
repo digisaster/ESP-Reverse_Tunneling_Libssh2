@@ -2,8 +2,10 @@
 
 #include "logger.h"
 #include <LittleFS.h>
+#include <cstring>
 #include <mbedtls/base64.h>
 #include <mbedtls/ctr_drbg.h>
+#include <mbedtls/ecp.h>
 #include <mbedtls/entropy.h>
 #include <mbedtls/pk.h>
 
@@ -168,7 +170,8 @@ bool generateKeyPair(String &privateKey, String &publicKey) {
 bool persistKeyPair(const String &privateKey, const String &publicKey) {
   removeIfExists(KEY_TEMP);
   removeIfExists(PUBLIC_KEY_TEMP);
-  if (!writeFile(KEY_TEMP, privateKey) || !writeFile(PUBLIC_KEY_TEMP, publicKey)) {
+  if (!writeFile(KEY_TEMP, privateKey) ||
+      !writeFile(PUBLIC_KEY_TEMP, publicKey)) {
     removeIfExists(KEY_TEMP);
     removeIfExists(PUBLIC_KEY_TEMP);
     return false;
