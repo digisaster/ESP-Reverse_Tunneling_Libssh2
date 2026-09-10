@@ -134,10 +134,6 @@ void loop() {
   wifi_provisioning::pollConfigResetButton();
   if (wifi_provisioning::isActive()) {
     wifi_provisioning::loop();
-    // As soon as first-boot WiFi provisioning succeeds, bring up the Minis
-    // control plane and provision a local SSH identity while the setup page
-    // remains available as a fallback. A fresh valid Minis config gets the
-    // first chance to activate the tunnel automatically.
     ensureMinisControlPlane();
     if (!deviceConfig.setupComplete && !wifi_provisioning::editRequested())
       applyPendingOnboardingMinisConfig();
@@ -206,13 +202,10 @@ void ensureMinisControlPlane() {
       LOG_W("MAIN", "Minis heartbeat service could not be started");
   }
 
-  // Preserve existing complete/manual configurations. Automatic identity
-  // provisioning is only part of first-time onboarding.
   if (!deviceConfig.setupComplete && !automaticIdentityAttempted) {
     automaticIdentityAttempted = true;
-    if (!ssh_key_provisioning::ensure(deviceConfig)) {
+    if (!ssh_key_provisioning::ensure(deviceConfig))
       LOG_W("MAIN", "Automatic SSH identity provisioning did not complete");
-    }
   }
 
   if (!deviceConfig.setupComplete &&
@@ -331,11 +324,15 @@ void applyPendingOnboardingMinisConfig() {
     return;
   }
 
+  deviceConfig = next;
+  wifi_provisioning::finishManagedSetup();
+  if (next.tunnelEnabled)
+    status_led::set(status_led::State::Connected);
+  else
+    status_led::set(status_led::State::Disabled);
   LOG_I("MINIS", next.tunnelEnabled
-                    ? "Managed onboarding tunnel activated and stored; restarting into managed mode"
-                    : "Managed onboarding configuration stored with tunnel disabled; restarting into managed mode");
-  delay(250);
-  ESP.restart();
+                    ? "Managed onboarding tunnel activated and stored; continuing without restart"
+                    : "Managed onboarding configuration stored with tunnel disabled; continuing without restart");
 }
 
 void applyPendingMinisConfig() {
@@ -361,7 +358,6 @@ void applyPendingMinisConfig() {
       LOG_I("MINIS", "Managed tunnel config is already active");
       return;
     }
-
     LOG_W("MINIS", "Managed config matches stored settings but tunnel is disconnected; reconnecting");
     status_led::set(status_led::State::Connecting);
     if (tunnel.connectSSH())
@@ -475,10 +471,8 @@ void reportStats() {
   static unsigned long lastBytesReceived = 0;
   unsigned long bytesSent = tunnel.getBytesSent();
   unsigned long bytesReceived = tunnel.getBytesReceived();
-  unsigned long sentRate =
-      (bytesSent - lastBytesSent) * 1000 / STATS_INTERVAL;
-  unsigned long receivedRate =
-      (bytesReceived - lastBytesReceived) * 1000 / STATS_INTERVAL;
+  unsigned long sentRate = (bytesSent - lastBytesSent) * 1000 / STATS_INTERVAL;
+  unsigned long receivedRate = (bytesReceived - lastBytesReceived) * 1000 / STATS_INTERVAL;
   if (freeHeap > 8000) {
     LOGF_I("STATS", "Send Rate: %lu B/s", sentRate);
     LOGF_I("STATS", "Receive Rate: %lu B/s", receivedRate);
@@ -499,18 +493,12 @@ void reportStats() {
 
 const char *closeReasonToString(ChannelCloseReason reason) {
   switch (reason) {
-  case ChannelCloseReason::RemoteClosed:
-    return "RemoteClosed";
-  case ChannelCloseReason::LocalClosed:
-    return "LocalClosed";
-  case ChannelCloseReason::Error:
-    return "Error";
-  case ChannelCloseReason::Timeout:
-    return "Timeout";
-  case ChannelCloseReason::Manual:
-    return "Manual";
-  default:
-    return "Unknown";
+  case ChannelCloseReason::RemoteClosed: return "RemoteClosed";
+  case ChannelCloseReason::LocalClosed: return "LocalClosed";
+  case ChannelCloseReason::Error: return "Error";
+  case ChannelCloseReason::Timeout: return "Timeout";
+  case ChannelCloseReason::Manual: return "Manual";
+  default: return "Unknown";
   }
 }
 void onSessionConnected() {
