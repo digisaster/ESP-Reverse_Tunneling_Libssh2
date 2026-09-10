@@ -20,6 +20,7 @@ constexpr size_t PRIVATE_PEM_BUFFER_SIZE = 1024;
 constexpr size_t PUBLIC_DER_BUFFER_SIZE = 192;
 constexpr size_t OPENSSH_BLOB_BUFFER_SIZE = 160;
 constexpr size_t OPENSSH_BASE64_BUFFER_SIZE = 256;
+constexpr size_t P256_UNCOMPRESSED_POINT_SIZE = 65;
 
 void removeIfExists(const char *path) {
   if (LittleFS.exists(path))
@@ -89,15 +90,25 @@ bool appendBytes(unsigned char *buffer, size_t capacity, size_t &used,
 }
 
 bool extractP256PointFromSpki(const unsigned char *der, size_t derLength,
-                              unsigned char point[65]) {
-  // mbedtls_pk_write_pubkey_der() emits SubjectPublicKeyInfo. For an
-  // uncompressed P-256 key its BIT STRING ends in: 03 42 00 04 <64 bytes>.
-  if (derLength < 69)
-    return false;
-  for (size_t i = 0; i + 69 <= derLength; ++i) {
-    if (der[i] == 0x03 && der[i + 1] == 0x42 && der[i + 2] == 0x00 &&
-        der[i + 3] == 0x04) {
-      memcpy(point, der + i + 3, 65);
+                              unsigned char point[P256_UNCOMPRESSED_POINT_SIZE]) {
+  // RFC 5480 SubjectPublicKeyInfo for a P-256 key ends with the SEC1
+  // uncompressed point: 0x04 || X(32) || Y(32). mbedTLS may encode the
+  // surrounding BIT STRING differently between versions, so do not depend on
+  // a specific ASN.1 length byte sequence.
+  if (derLength >= P256_UNCOMPRESSED_POINT_SIZE) {
+    const unsigned char *candidate =
+        der + derLength - P256_UNCOMPRESSED_POINT_SIZE;
+    if (candidate[0] == 0x04) {
+      memcpy(point, candidate, P256_UNCOMPRESSED_POINT_SIZE);
+      return true;
+    }
+  }
+
+  // Conservative fallback for older encoders where the point is not the final
+  // object bytes. Look for an uncompressed point with enough bytes remaining.
+  for (size_t i = 0; i + P256_UNCOMPRESSED_POINT_SIZE <= derLength; ++i) {
+    if (der[i] == 0x04) {
+      memcpy(point, der + i, P256_UNCOMPRESSED_POINT_SIZE);
       return true;
     }
   }
@@ -119,12 +130,13 @@ bool buildOpenSshPublicKey(mbedtls_pk_context &pk, String &publicKey) {
 
   const unsigned char *der =
       derBuffer + sizeof(derBuffer) - static_cast<size_t>(derLength);
-  unsigned char point[65] = {0};
+  unsigned char point[P256_UNCOMPRESSED_POINT_SIZE] = {0};
   if (!extractP256PointFromSpki(der, static_cast<size_t>(derLength), point)) {
     LOGF_E("KEY", "Unable to extract P-256 point from %d-byte public DER",
            derLength);
     return false;
   }
+  LOGF_I("KEY", "P-256 public point extracted from %d-byte DER", derLength);
 
   static constexpr char ALGORITHM[] = "ecdsa-sha2-nistp256";
   static constexpr char CURVE[] = "nistp256";
