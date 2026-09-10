@@ -92,23 +92,12 @@ String escapeHtml(const String &value) {
   String result;
   for (size_t i = 0; i < value.length(); ++i) {
     switch (value[i]) {
-    case '&':
-      result += F("&amp;");
-      break;
-    case '<':
-      result += F("&lt;");
-      break;
-    case '>':
-      result += F("&gt;");
-      break;
-    case '"':
-      result += F("&quot;");
-      break;
-    case '\'':
-      result += F("&#39;");
-      break;
-    default:
-      result += value[i];
+    case '&': result += F("&amp;"); break;
+    case '<': result += F("&lt;"); break;
+    case '>': result += F("&gt;"); break;
+    case '"': result += F("&quot;"); break;
+    case '\'': result += F("&#39;"); break;
+    default: result += value[i];
     }
   }
   return result;
@@ -124,14 +113,11 @@ void removeIfExists(const char *path) {
     LittleFS.remove(path);
 }
 bool parsePort(const String &value, int &port) {
-  if (value.isEmpty())
-    return false;
+  if (value.isEmpty()) return false;
   for (size_t i = 0; i < value.length(); ++i)
-    if (!isDigit(value[i]))
-      return false;
+    if (!isDigit(value[i])) return false;
   long parsed = value.toInt();
-  if (parsed < 1 || parsed > 65535)
-    return false;
+  if (parsed < 1 || parsed > 65535) return false;
   port = parsed;
   return true;
 }
@@ -141,61 +127,43 @@ bool validKey(const String &key) {
          key.indexOf("PRIVATE KEY-----") >= 0 && key.indexOf("-----END") >= 0;
 }
 bool validPublicKey(const String &key) {
-  if (key.isEmpty())
-    return true;
-  if (key.length() > MAX_PUBLIC_KEY_SIZE)
-    return false;
-
-  String trimmed = key;
-  trimmed.trim();
+  if (key.isEmpty()) return true;
+  if (key.length() > MAX_PUBLIC_KEY_SIZE) return false;
+  String trimmed = key; trimmed.trim();
   const int separator = trimmed.indexOf(' ');
   if (separator <= 0 || separator == static_cast<int>(trimmed.length() - 1))
     return false;
-
   const String algorithm = trimmed.substring(0, separator);
   return algorithm == "ssh-rsa" || algorithm == "ecdsa-sha2-nistp256" ||
-         algorithm == "ecdsa-sha2-nistp384" ||
-         algorithm == "ecdsa-sha2-nistp521";
+         algorithm == "ecdsa-sha2-nistp384" || algorithm == "ecdsa-sha2-nistp521";
 }
 bool loadKeys(String &privateKey, String &publicKey) {
   File file = LittleFS.open(KEY_PATH, "r");
-  if (!file || file.size() == 0 || file.size() > MAX_KEY_SIZE)
-    return false;
-  privateKey = file.readString();
-  file.close();
-  if (!validKey(privateKey))
-    return false;
-
+  if (!file || file.size() == 0 || file.size() > MAX_KEY_SIZE) return false;
+  privateKey = file.readString(); file.close();
+  if (!validKey(privateKey)) return false;
   publicKey = "";
   file = LittleFS.open(PUBLIC_KEY_PATH, "r");
-  if (!file)
-    return true;
-  if (file.size() == 0 || file.size() > MAX_PUBLIC_KEY_SIZE)
-    return false;
-  publicKey = file.readString();
-  file.close();
+  if (!file) return true;
+  if (file.size() == 0 || file.size() > MAX_PUBLIC_KEY_SIZE) return false;
+  publicKey = file.readString(); file.close();
   return validPublicKey(publicKey);
 }
 bool validDeviceConfig(const DeviceRuntimeConfig &c) {
-  if (c.sshHost.isEmpty() || c.sshHost.length() > 253 ||
-      c.sshUsername.isEmpty() || c.sshUsername.length() > 128 ||
-      c.sshPort < 1 || c.sshPort > 65535 || c.remoteBindHost.isEmpty() ||
-      c.remoteBindPort < 1 || c.remoteBindPort > 65535 ||
+  if (c.sshHost.isEmpty() || c.sshHost.length() > 253 || c.sshUsername.isEmpty() ||
+      c.sshUsername.length() > 128 || c.sshPort < 1 || c.sshPort > 65535 ||
+      c.remoteBindHost.isEmpty() || c.remoteBindPort < 1 || c.remoteBindPort > 65535 ||
       c.localHost.isEmpty() || c.localPort < 1 || c.localPort > 65535)
     return false;
-  return c.sshAuthMethod == SSHAuthMethod::Password
-             ? !c.sshPassword.isEmpty()
-             : validKey(c.sshPrivateKey) && validPublicKey(c.sshPublicKey);
+  return c.sshAuthMethod == SSHAuthMethod::Password ? !c.sshPassword.isEmpty()
+      : validKey(c.sshPrivateKey) && validPublicKey(c.sshPublicKey);
 }
 void writeValue(File &file, const char *name, const String &value) {
-  file.print(name);
-  file.print('=');
-  file.println(encode(value));
+  file.print(name); file.print('='); file.println(encode(value));
 }
 bool writeConfig(const DeviceRuntimeConfig &c) {
   File file = LittleFS.open(CONFIG_TEMP, "w");
-  if (!file)
-    return false;
+  if (!file) return false;
   file.println(F("version=3"));
   file.println(c.setupComplete ? F("setup_complete=1") : F("setup_complete=0"));
   writeValue(file, "wifi_ssid", c.wifiSsid);
@@ -204,9 +172,7 @@ bool writeConfig(const DeviceRuntimeConfig &c) {
     writeValue(file, "ssh_host", c.sshHost);
     writeValue(file, "ssh_port", String(c.sshPort));
     writeValue(file, "ssh_user", c.sshUsername);
-    writeValue(file, "ssh_auth",
-               c.sshAuthMethod == SSHAuthMethod::PrivateKey ? "key"
-                                                            : "password");
+    writeValue(file, "ssh_auth", c.sshAuthMethod == SSHAuthMethod::PrivateKey ? "key" : "password");
     writeValue(file, "ssh_password", c.sshPassword);
     writeValue(file, "ssh_key_passphrase", c.sshKeyPassphrase);
     writeValue(file, "tunnel_enabled", c.tunnelEnabled ? "1" : "0");
@@ -215,52 +181,37 @@ bool writeConfig(const DeviceRuntimeConfig &c) {
     writeValue(file, "local_host", c.localHost);
     writeValue(file, "local_port", String(c.localPort));
   }
-  file.flush();
-  file.close();
-
+  file.flush(); file.close();
   removeIfExists(CONFIG_BACKUP);
   const bool hadExistingConfig = LittleFS.exists(CONFIG_PATH);
   if (hadExistingConfig && !LittleFS.rename(CONFIG_PATH, CONFIG_BACKUP)) {
-    removeIfExists(CONFIG_TEMP);
-    return false;
+    removeIfExists(CONFIG_TEMP); return false;
   }
   if (!LittleFS.rename(CONFIG_TEMP, CONFIG_PATH)) {
-    if (hadExistingConfig)
-      LittleFS.rename(CONFIG_BACKUP, CONFIG_PATH);
-    removeIfExists(CONFIG_TEMP);
-    return false;
+    if (hadExistingConfig) LittleFS.rename(CONFIG_BACKUP, CONFIG_PATH);
+    removeIfExists(CONFIG_TEMP); return false;
   }
   removeIfExists(CONFIG_BACKUP);
   return true;
 }
 bool writeKeyFile(const char *path, const String &key) {
   File file = LittleFS.open(path, "w");
-  if (!file)
-    return false;
-  const size_t written = file.print(key);
-  file.close();
+  if (!file) return false;
+  const size_t written = file.print(key); file.close();
   return written == key.length();
 }
 bool saveKeys(const String &privateKey, const String &publicKey) {
-  removeIfExists(KEY_TEMP);
-  removeIfExists(PUBLIC_KEY_TEMP);
-  if (!writeKeyFile(KEY_TEMP, privateKey))
-    return false;
+  removeIfExists(KEY_TEMP); removeIfExists(PUBLIC_KEY_TEMP);
+  if (!writeKeyFile(KEY_TEMP, privateKey)) return false;
   if (!publicKey.isEmpty() && !writeKeyFile(PUBLIC_KEY_TEMP, publicKey)) {
-    removeIfExists(KEY_TEMP);
-    return false;
+    removeIfExists(KEY_TEMP); return false;
   }
-
   removeIfExists(KEY_PATH);
   if (!LittleFS.rename(KEY_TEMP, KEY_PATH)) {
-    removeIfExists(PUBLIC_KEY_TEMP);
-    return false;
+    removeIfExists(PUBLIC_KEY_TEMP); return false;
   }
-
   removeIfExists(PUBLIC_KEY_PATH);
-  if (!publicKey.isEmpty() &&
-      !LittleFS.rename(PUBLIC_KEY_TEMP, PUBLIC_KEY_PATH))
-    return false;
+  if (!publicKey.isEmpty() && !LittleFS.rename(PUBLIC_KEY_TEMP, PUBLIC_KEY_PATH)) return false;
   return true;
 }
 bool loadConfig(DeviceRuntimeConfig &c) {
@@ -268,363 +219,171 @@ bool loadConfig(DeviceRuntimeConfig &c) {
     LittleFS.rename(CONFIG_BACKUP, CONFIG_PATH);
   else if (LittleFS.exists(CONFIG_PATH))
     removeIfExists(CONFIG_BACKUP);
-
   File file = LittleFS.open(CONFIG_PATH, "r");
-  if (!file)
-    return false;
+  if (!file) return false;
   int version = 0;
   String complete, sshPort, remotePort, localPort, auth, tunnelEnabled;
   while (file.available()) {
     String line = file.readStringUntil('\n');
-    if (line.endsWith("\r"))
-      line.remove(line.length() - 1);
-    int pos = line.indexOf('=');
-    if (pos <= 0)
-      continue;
+    if (line.endsWith("\r")) line.remove(line.length() - 1);
+    int pos = line.indexOf('='); if (pos <= 0) continue;
     String name = line.substring(0, pos), value;
-    if (!decode(line.substring(pos + 1), value))
-      return false;
-    if (name == "version")
-      version = value.toInt();
-    else if (name == "setup_complete")
-      complete = value;
-    else if (name == "wifi_ssid")
-      c.wifiSsid = value;
-    else if (name == "wifi_password")
-      c.wifiPassword = value;
-    else if (name == "ssh_host")
-      c.sshHost = value;
-    else if (name == "ssh_port")
-      sshPort = value;
-    else if (name == "ssh_user")
-      c.sshUsername = value;
-    else if (name == "ssh_auth")
-      auth = value;
-    else if (name == "ssh_password")
-      c.sshPassword = value;
-    else if (name == "ssh_key_passphrase")
-      c.sshKeyPassphrase = value;
-    else if (name == "tunnel_enabled")
-      tunnelEnabled = value;
-    else if (name == "remote_host")
-      c.remoteBindHost = value;
-    else if (name == "remote_port")
-      remotePort = value;
-    else if (name == "local_host")
-      c.localHost = value;
-    else if (name == "local_port")
-      localPort = value;
+    if (!decode(line.substring(pos + 1), value)) return false;
+    if (name == "version") version = value.toInt();
+    else if (name == "setup_complete") complete = value;
+    else if (name == "wifi_ssid") c.wifiSsid = value;
+    else if (name == "wifi_password") c.wifiPassword = value;
+    else if (name == "ssh_host") c.sshHost = value;
+    else if (name == "ssh_port") sshPort = value;
+    else if (name == "ssh_user") c.sshUsername = value;
+    else if (name == "ssh_auth") auth = value;
+    else if (name == "ssh_password") c.sshPassword = value;
+    else if (name == "ssh_key_passphrase") c.sshKeyPassphrase = value;
+    else if (name == "tunnel_enabled") tunnelEnabled = value;
+    else if (name == "remote_host") c.remoteBindHost = value;
+    else if (name == "remote_port") remotePort = value;
+    else if (name == "local_host") c.localHost = value;
+    else if (name == "local_port") localPort = value;
   }
-  if ((version != 1 && version != 2 && version != 3) ||
-      c.wifiSsid.isEmpty() ||
+  if ((version != 1 && version != 2 && version != 3) || c.wifiSsid.isEmpty() ||
       c.wifiSsid.length() > 32 || c.wifiPassword.length() > 63)
     return false;
-  if (version == 1 || complete != "1")
-    return true;
+  if (version == 1 || complete != "1") return true;
   if (version == 3) {
-    if (tunnelEnabled != "0" && tunnelEnabled != "1")
-      return true;
+    if (tunnelEnabled != "0" && tunnelEnabled != "1") return true;
     c.tunnelEnabled = tunnelEnabled == "1";
   }
-  c.sshAuthMethod =
-      auth == "key" ? SSHAuthMethod::PrivateKey : SSHAuthMethod::Password;
-  if (!parsePort(sshPort, c.sshPort) ||
-      !parsePort(remotePort, c.remoteBindPort) ||
-      !parsePort(localPort, c.localPort))
-    return true;
-  if (c.sshAuthMethod == SSHAuthMethod::PrivateKey &&
-      !loadKeys(c.sshPrivateKey, c.sshPublicKey))
-    return true;
+  c.sshAuthMethod = auth == "key" ? SSHAuthMethod::PrivateKey : SSHAuthMethod::Password;
+  if (!parsePort(sshPort, c.sshPort) || !parsePort(remotePort, c.remoteBindPort) ||
+      !parsePort(localPort, c.localPort)) return true;
+  if (c.sshAuthMethod == SSHAuthMethod::PrivateKey && !loadKeys(c.sshPrivateKey, c.sshPublicKey)) return true;
   c.setupComplete = validDeviceConfig(c);
   return true;
 }
 String pageStart(const char *title) {
   String p;
   p.reserve(3072);
-  p += F(
-      "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' "
-      "content='width=device-width,initial-scale=1'><style>body{font-family:"
-      "system-ui;max-width:620px;margin:32px auto;padding:0 "
-      "16px;background:#f5f7fa;color:#18212b}main{background:#fff;padding:24px;"
-      "border-radius:12px}label{display:block;margin-top:16px;font-weight:600}"
-      "select,input,textarea,button{box-sizing:border-box;width:100%;padding:"
-      "12px;margin-top:6px;border:1px solid "
-      "#aeb8c2;border-radius:8px;font:inherit}textarea{min-height:180px;font-"
-      "family:monospace}button{background:#1769aa;color:#fff;border:0;font-"
-      "weight:700}.note{color:#56616d}.error{color:#a61b1b;font-weight:700}."
-      "grid{display:grid;grid-template-columns:2fr "
-      "1fr;gap:12px}.hidden{display:none}@media(max-width:520px){.grid{grid-"
-      "template-columns:1fr}}</style></head><body><main><h1>");
-  p += title;
-  p += F("</h1>");
-  return p;
+  p += F("<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><style>body{font-family:system-ui;max-width:620px;margin:32px auto;padding:0 16px;background:#f5f7fa;color:#18212b}main{background:#fff;padding:24px;border-radius:12px}label{display:block;margin-top:16px;font-weight:600}select,input,textarea,button{box-sizing:border-box;width:100%;padding:12px;margin-top:6px;border:1px solid #aeb8c2;border-radius:8px;font:inherit}textarea{min-height:180px;font-family:monospace}button{background:#1769aa;color:#fff;border:0;font-weight:700}.note{color:#56616d}.error{color:#a61b1b;font-weight:700}.grid{display:grid;grid-template-columns:2fr 1fr;gap:12px}.hidden{display:none}@media(max-width:520px){.grid{grid-template-columns:1fr}}</style></head><body><main><h1>");
+  p += title; p += F("</h1>"); return p;
 }
 void addError(String &p, const String &error) {
-  if (!error.isEmpty()) {
-    p += F("<p class='error'>");
-    p += escapeHtml(error);
-    p += F("</p>");
-  }
+  if (!error.isEmpty()) { p += F("<p class='error'>"); p += escapeHtml(error); p += F("</p>"); }
 }
 void sendWifiPage(const String &error = "") {
   String p = pageStart("esp32tun WiFi setup");
-  p += F("<p>Select a WiFi network and enter its password.</p>");
-  addError(p, error);
-  p += F("<form method='post' action='/save-wifi'><label>Detected "
-         "network</label><select name='ssid'>");
+  p += F("<p>Select a WiFi network and enter its password.</p>"); addError(p, error);
+  p += F("<form method='post' action='/save-wifi'><label>Detected network</label><select name='ssid'>");
   for (int i = 0; i < WiFi.scanComplete(); ++i) {
     String ssid = escapeHtml(WiFi.SSID(i));
-    p += F("<option value=\"");
-    p += ssid;
-    p += F("\">");
-    p += ssid;
-    p += F(" (");
-    p += String(WiFi.RSSI(i));
-    p += F(" dBm)</option>");
+    p += F("<option value=\""); p += ssid; p += F("\">"); p += ssid; p += F(" ("); p += String(WiFi.RSSI(i)); p += F(" dBm)</option>");
   }
-  p += F("</select><label>Hidden or custom SSID</label><input "
-         "name='custom_ssid' maxlength='32'><label>WiFi password</label><input "
-         "name='password' type='password' maxlength='63'><button>Test and "
-         "continue</button></form><p class='note'>The network is tested before "
-         "it is stored.</p></main></body></html>");
+  p += F("</select><label>Hidden or custom SSID</label><input name='custom_ssid' maxlength='32'><label>WiFi password</label><input name='password' type='password' maxlength='63'><button>Test and continue</button></form><p class='note'>The network is tested before it is stored.</p></main></body></html>");
   server->send(200, "text/html; charset=utf-8", p);
 }
 void sendDevicePage(const String &error = "") {
   String p = pageStart("esp32tun tunnel setup");
-  p += F("<p>Configure the SSH server and one reverse tunnel.</p>");
-  addError(p, error);
-  p += F("<form method='post' action='/save-device'><div class='grid'><div>"
-         "<label>SSH server</label><input name='ssh_host' required "
-         "maxlength='253' value='");
+  p += F("<p>Configure the SSH server and one reverse tunnel.</p>"); addError(p, error);
+  p += F("<form method='post' action='/save-device'><div class='grid'><div><label>SSH server</label><input name='ssh_host' required maxlength='253' value='");
   p += escapeHtml(current->sshHost);
-  p += F("'></div><div><label>SSH port</label><input name='ssh_port' "
-         "type='number' min='1' max='65535' value='");
-  p += String(current->sshPort);
-  p += F("'></div></div><label>SSH username</label><input name='ssh_user' "
-         "required maxlength='128' value='");
-  p += escapeHtml(current->sshUsername);
-  p += F("'><label>Authentication</label><select id='auth' name='ssh_auth' "
-         "onchange='toggleAuth()'><option value='password'");
-  if (current->sshAuthMethod == SSHAuthMethod::Password)
-    p += F(" selected");
-  p += F(">Password</option><option value='key'");
-  if (current->sshAuthMethod == SSHAuthMethod::PrivateKey)
-    p += F(" selected");
-  p += F(">Private key</option></select><div id='password-fields'><label>SSH "
-         "password</label><input name='ssh_password' type='password' "
-         "placeholder='Leave blank to keep the stored password'></div><div "
-         "id='key-fields' class='hidden'><label>Private key</label><textarea "
-         "name='ssh_private_key' maxlength='16384' placeholder='Leave blank "
-         "to keep the stored private key'></textarea><label>Public key "
-         "(recommended for ECDSA)</label><textarea name='ssh_public_key' "
-         "maxlength='4096' placeholder='Leave blank to keep the stored public "
-         "key unless replacing the private key'></textarea><label>Key "
-         "passphrase "
-         "(optional)</label><input name='ssh_key_passphrase' type='password' "
-         "placeholder='Leave blank to keep the stored passphrase'></div><h2>"
-         "Reverse tunnel</h2><div class='grid'><div><label>Remote bind "
-         "address</label><input name='remote_host' value='");
+  p += F("'></div><div><label>SSH port</label><input name='ssh_port' type='number' min='1' max='65535' value='"); p += String(current->sshPort);
+  p += F("'></div></div><label>SSH username</label><input name='ssh_user' required maxlength='128' value='"); p += escapeHtml(current->sshUsername);
+  p += F("'><label>Authentication</label><select id='auth' name='ssh_auth' onchange='toggleAuth()'><option value='password'");
+  if (current->sshAuthMethod == SSHAuthMethod::Password) p += F(" selected");
+  p += F(">Password</option><option value='key'"); if (current->sshAuthMethod == SSHAuthMethod::PrivateKey) p += F(" selected");
+  p += F(">Private key</option></select><div id='password-fields'><label>SSH password</label><input name='ssh_password' type='password' placeholder='Leave blank to keep the stored password'></div><div id='key-fields' class='hidden'><label>Private key</label><textarea name='ssh_private_key' maxlength='16384' placeholder='Leave blank to keep the stored private key'></textarea><label>Public key (recommended for ECDSA)</label><textarea name='ssh_public_key' maxlength='4096' placeholder='Leave blank to keep the stored public key unless replacing the private key'></textarea><label>Key passphrase (optional)</label><input name='ssh_key_passphrase' type='password' placeholder='Leave blank to keep the stored passphrase'></div><h2>Reverse tunnel</h2><div class='grid'><div><label>Remote bind address</label><input name='remote_host' value='");
   p += escapeHtml(current->remoteBindHost);
-  p += F("'></div><div><label>Remote port</label><input name='remote_port' "
-         "type='number' min='1' max='65535' value='");
-  p += String(current->remoteBindPort);
-  p += F("'></div></div><div class='grid'><div><label>Local target</label>"
-         "<input name='local_host' value='");
-  p += escapeHtml(current->localHost);
-  p += F("'></div><div><label>Local port</label><input name='local_port' "
-         "type='number' min='1' max='65535' value='");
-  p += String(current->localPort);
-  p += F("'></div></div><button>Save and start tunnel</button></form><p "
-         "class='note'>Stored passwords and keys are never displayed. Leave "
-         "those fields empty to keep them unchanged.</p><script>function "
-         "toggleAuth(){let k=document.getElementById('auth').value==='key';"
-         "document.getElementById('password-fields').className=k?'hidden':'';"
-         "document.getElementById('key-fields').className=k?'':'hidden'}"
-         "toggleAuth()</script></main></body></html>");
+  p += F("'></div><div><label>Remote port</label><input name='remote_port' type='number' min='1' max='65535' value='"); p += String(current->remoteBindPort);
+  p += F("'></div></div><div class='grid'><div><label>Local target</label><input name='local_host' value='"); p += escapeHtml(current->localHost);
+  p += F("'></div><div><label>Local port</label><input name='local_port' type='number' min='1' max='65535' value='"); p += String(current->localPort);
+  p += F("'></div></div><button>Save and start tunnel</button></form><p class='note'>Stored passwords and keys are never displayed. Leave those fields empty to keep them unchanged.</p><script>function toggleAuth(){let k=document.getElementById('auth').value==='key';document.getElementById('password-fields').className=k?'hidden':'';document.getElementById('key-fields').className=k?'':'hidden'}toggleAuth()</script></main></body></html>");
   server->send(200, "text/html; charset=utf-8", p);
 }
 void stopServices() {
-  if (dns) {
-    dns->stop();
-    delete dns;
-    dns = nullptr;
-  }
-  if (server) {
-    server->stop();
-    delete server;
-    server = nullptr;
-  }
+  if (dns) { dns->stop(); delete dns; dns = nullptr; }
+  if (server) { server->stop(); delete server; server = nullptr; }
   mode = PortalMode::None;
 }
 bool startDevicePortalInternal() {
   server = new WebServer(80);
-  if (!server)
-    return false;
+  if (!server) return false;
   server->on("/", HTTP_GET, [] { sendDevicePage(); });
   server->on("/save-device", HTTP_POST, [] {
     DeviceRuntimeConfig c = *current;
     const SSHAuthMethod storedAuthMethod = current->sshAuthMethod;
-    c.sshHost = server->arg("ssh_host");
-    c.sshUsername = server->arg("ssh_user");
-    c.remoteBindHost = server->arg("remote_host");
-    c.localHost = server->arg("local_host");
-    if (!parsePort(server->arg("ssh_port"), c.sshPort) ||
-        !parsePort(server->arg("remote_port"), c.remoteBindPort) ||
-        !parsePort(server->arg("local_port"), c.localPort)) {
-      sendDevicePage("Every port must be between 1 and 65535.");
-      return;
-    }
-    c.sshAuthMethod = server->arg("ssh_auth") == "key"
-                          ? SSHAuthMethod::PrivateKey
-                          : SSHAuthMethod::Password;
+    c.sshHost = server->arg("ssh_host"); c.sshUsername = server->arg("ssh_user");
+    c.remoteBindHost = server->arg("remote_host"); c.localHost = server->arg("local_host");
+    if (!parsePort(server->arg("ssh_port"), c.sshPort) || !parsePort(server->arg("remote_port"), c.remoteBindPort) || !parsePort(server->arg("local_port"), c.localPort)) { sendDevicePage("Every port must be between 1 and 65535."); return; }
+    c.sshAuthMethod = server->arg("ssh_auth") == "key" ? SSHAuthMethod::PrivateKey : SSHAuthMethod::Password;
     const String submittedPassword = server->arg("ssh_password");
-    String submittedKey = server->arg("ssh_private_key");
-    submittedKey.replace("\r\n", "\n");
-    String submittedPublicKey = server->arg("ssh_public_key");
-    submittedPublicKey.replace("\r\n", "\n");
+    String submittedKey = server->arg("ssh_private_key"); submittedKey.replace("\r\n", "\n");
+    String submittedPublicKey = server->arg("ssh_public_key"); submittedPublicKey.replace("\r\n", "\n");
     const String submittedPassphrase = server->arg("ssh_key_passphrase");
     if (c.sshAuthMethod == SSHAuthMethod::Password) {
-      if (!submittedPassword.isEmpty() ||
-          storedAuthMethod != SSHAuthMethod::Password)
-        c.sshPassword = submittedPassword;
+      if (!submittedPassword.isEmpty() || storedAuthMethod != SSHAuthMethod::Password) c.sshPassword = submittedPassword;
     } else if (!submittedKey.isEmpty()) {
-      c.sshPrivateKey = submittedKey;
-      // Never retain an old public key alongside a newly supplied private key.
-      c.sshPublicKey = submittedPublicKey;
-      c.sshKeyPassphrase = submittedPassphrase;
+      c.sshPrivateKey = submittedKey; c.sshPublicKey = submittedPublicKey; c.sshKeyPassphrase = submittedPassphrase;
     } else if (storedAuthMethod == SSHAuthMethod::PrivateKey) {
-      if (!submittedPublicKey.isEmpty())
-        c.sshPublicKey = submittedPublicKey;
-      if (!submittedPassphrase.isEmpty())
-        c.sshKeyPassphrase = submittedPassphrase;
+      if (!submittedPublicKey.isEmpty()) c.sshPublicKey = submittedPublicKey;
+      if (!submittedPassphrase.isEmpty()) c.sshKeyPassphrase = submittedPassphrase;
     }
-    c.setupComplete = true;
-    c.tunnelEnabled = true;
-    if (!validDeviceConfig(c)) {
-      sendDevicePage(c.sshAuthMethod == SSHAuthMethod::PrivateKey
-                         ? "Enter a valid private key and optional OpenSSH "
-                           "public-key line."
-                         : "Complete all fields and enter an SSH password.");
-      return;
-    }
+    c.setupComplete = true; c.tunnelEnabled = true;
+    if (!validDeviceConfig(c)) { sendDevicePage(c.sshAuthMethod == SSHAuthMethod::PrivateKey ? "Enter a valid private key and optional OpenSSH public-key line." : "Complete all fields and enter an SSH password."); return; }
     if (c.sshAuthMethod == SSHAuthMethod::PrivateKey) {
-      if (!saveKeys(c.sshPrivateKey, c.sshPublicKey)) {
-        sendDevicePage("The SSH keys could not be stored.");
-        return;
-      }
+      if (!saveKeys(c.sshPrivateKey, c.sshPublicKey)) { sendDevicePage("The SSH keys could not be stored."); return; }
       c.sshPassword = "";
     } else {
-      removeIfExists(KEY_PATH);
-      c.sshPrivateKey = "";
-      removeIfExists(PUBLIC_KEY_PATH);
-      c.sshPublicKey = "";
-      c.sshKeyPassphrase = "";
+      removeIfExists(KEY_PATH); c.sshPrivateKey = ""; removeIfExists(PUBLIC_KEY_PATH); c.sshPublicKey = ""; c.sshKeyPassphrase = "";
     }
-    if (!writeConfig(c)) {
-      sendDevicePage("The configuration could not be stored.");
-      return;
-    }
-    removeIfExists(EDIT_REQUEST_PATH);
-    configEditRequested = false;
-    String p = pageStart("Setup complete");
-    p += F("<p>The device will restart and start the reverse "
-           "tunnel.</p></main></body></html>");
-    server->send(200, "text/html; charset=utf-8", p);
-    delay(1500);
-    ESP.restart();
+    if (!writeConfig(c)) { sendDevicePage("The configuration could not be stored."); return; }
+    removeIfExists(EDIT_REQUEST_PATH); configEditRequested = false;
+    String p = pageStart("Setup complete"); p += F("<p>The device will restart and start the reverse tunnel.</p></main></body></html>");
+    server->send(200, "text/html; charset=utf-8", p); delay(1500); ESP.restart();
   });
   server->onNotFound([] { sendDevicePage(); });
-  server->begin();
-  mode = PortalMode::Device;
+  server->begin(); mode = PortalMode::Device;
   LOGF_I("SETUP", "Tunnel setup: http://%s", WiFi.localIP().toString().c_str());
   return true;
 }
 void handleWifiSave() {
-  String ssid = server->arg("custom_ssid");
-  if (ssid.isEmpty())
-    ssid = server->arg("ssid");
+  String ssid = server->arg("custom_ssid"); if (ssid.isEmpty()) ssid = server->arg("ssid");
   String password = server->arg("password");
-  if (ssid.isEmpty() || ssid.length() > 32) {
-    sendWifiPage("The SSID is missing or too long.");
-    return;
-  }
-  if (!password.isEmpty() &&
-      (password.length() < 8 || password.length() > 63)) {
-    sendWifiPage("A WiFi password must contain 8 to 63 characters.");
-    return;
-  }
+  if (ssid.isEmpty() || ssid.length() > 32) { sendWifiPage("The SSID is missing or too long."); return; }
+  if (!password.isEmpty() && (password.length() < 8 || password.length() > 63)) { sendWifiPage("A WiFi password must contain 8 to 63 characters."); return; }
   WiFi.begin(ssid.c_str(), password.c_str());
   unsigned long started = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - started < WIFI_TIMEOUT_MS)
-    delay(100);
-  if (WiFi.status() != WL_CONNECTED) {
-    WiFi.disconnect(false, false);
-    sendWifiPage("Connection failed. Check the SSID and password.");
-    return;
-  }
-  current->wifiSsid = ssid;
-  current->wifiPassword = password;
-  current->setupComplete = false;
-  if (!writeConfig(*current)) {
-    sendWifiPage("WiFi worked, but the configuration could not be stored.");
-    return;
-  }
+  while (WiFi.status() != WL_CONNECTED && millis() - started < WIFI_TIMEOUT_MS) delay(100);
+  if (WiFi.status() != WL_CONNECTED) { WiFi.disconnect(false, false); sendWifiPage("Connection failed. Check the SSID and password."); return; }
+  current->wifiSsid = ssid; current->wifiPassword = password; current->setupComplete = false;
+  if (!writeConfig(*current)) { sendWifiPage("WiFi worked, but the configuration could not be stored."); return; }
   String url = String("http://") + WiFi.localIP().toString() + "/";
   String p = pageStart("WiFi connected");
-  p += F(
-      "<p>Reconnect to the selected WiFi network, then open:</p><p><a href='");
-  p += url;
-  p += F("'>");
-  p += url;
-  p += F("</a></p><p class='note'>This page will continue automatically "
-         "when the device becomes reachable on that network.</p><script>"
-         "const target='");
-  p += url;
-  p += F("';function continueSetup(){fetch(target,{mode:'no-cors',cache:"
-         "'no-store'}).then(()=>location.replace(target)).catch(()=>"
-         "setTimeout(continueSetup,1500))}setTimeout(continueSetup,3500);"
-         "</script></main></body></html>");
-  server->send(200, "text/html; charset=utf-8", p);
-  transitionPending = true;
-  transitionAt = millis();
+  p += F("<p>Reconnect to the selected WiFi network, then open:</p><p><a href='"); p += url; p += F("'>"); p += url;
+  p += F("</a></p><p class='note'>This page will continue automatically when the device becomes reachable on that network.</p><script>const target='"); p += url;
+  p += F("';function continueSetup(){fetch(target,{mode:'no-cors',cache:'no-store'}).then(()=>location.replace(target)).catch(()=>setTimeout(continueSetup,1500))}setTimeout(continueSetup,3500);</script></main></body></html>");
+  server->send(200, "text/html; charset=utf-8", p); transitionPending = true; transitionAt = millis();
 }
 bool startWifiPortal() {
-  char suffix[7];
-  snprintf(suffix, sizeof(suffix), "%06lX",
-           static_cast<unsigned long>(ESP.getEfuseMac() & 0xFFFFFF));
+  char suffix[7]; snprintf(suffix, sizeof(suffix), "%06lX", static_cast<unsigned long>(ESP.getEfuseMac() & 0xFFFFFF));
   String name = String("esp32tun-") + suffix;
   WiFi.mode(WIFI_AP_STA);
-  if (!WiFi.softAP(name.c_str()))
-    return false;
-  LOGF_I("SETUP", "Open WiFi: %s", name.c_str());
-  LOGF_I("SETUP", "Open http://%s", WiFi.softAPIP().toString().c_str());
+  if (!WiFi.softAP(name.c_str())) return false;
+  LOGF_I("SETUP", "Open WiFi: %s", name.c_str()); LOGF_I("SETUP", "Open http://%s", WiFi.softAPIP().toString().c_str());
   WiFi.scanNetworks(false, true);
-  dns = new DNSServer();
-  server = new WebServer(80);
-  if (!dns || !server) {
-    stopServices();
-    return false;
-  }
-  dns->start(53, "*", WiFi.softAPIP());
-  server->on("/save-wifi", HTTP_POST, handleWifiSave);
-  server->onNotFound([] { sendWifiPage(); });
-  server->begin();
-  mode = PortalMode::Wifi;
-  return true;
+  dns = new DNSServer(); server = new WebServer(80);
+  if (!dns || !server) { stopServices(); return false; }
+  dns->start(53, "*", WiFi.softAPIP()); server->on("/save-wifi", HTTP_POST, handleWifiSave); server->onNotFound([] { sendWifiPage(); }); server->begin(); mode = PortalMode::Wifi; return true;
 }
 } // namespace
 
 bool begin(DeviceRuntimeConfig &config) {
   current = &config;
-  if (!mountStorage())
-    return false;
+  if (!mountStorage()) return false;
 #if ESP32TUN_CONFIG_BUTTON_PIN >= 0
   pinMode(ESP32TUN_CONFIG_BUTTON_PIN, INPUT_PULLUP);
   LOG_I("SETUP", "Press BOOT 3 times to edit, or hold 4 seconds to reset");
 #endif
   configEditRequested = LittleFS.exists(EDIT_REQUEST_PATH);
-  if (loadConfig(config))
-    return true;
+  if (loadConfig(config)) return true;
   return startWifiPortal();
 }
 bool startDeviceSetup(DeviceRuntimeConfig &config) {
@@ -632,9 +391,17 @@ bool startDeviceSetup(DeviceRuntimeConfig &config) {
   return WiFi.status() == WL_CONNECTED && startDevicePortalInternal();
 }
 bool saveManagedConfig(const DeviceRuntimeConfig &config) {
-  if (!config.setupComplete)
-    return false;
+  if (!config.setupComplete) return false;
   return writeConfig(config);
+}
+void finishManagedSetup() {
+  transitionPending = false;
+  removeIfExists(EDIT_REQUEST_PATH);
+  configEditRequested = false;
+  stopServices();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  LOG_I("SETUP", "Managed configuration active; setup portal closed");
 }
 bool isActive() { return mode != PortalMode::None; }
 bool editRequested() { return configEditRequested; }
@@ -645,74 +412,32 @@ void pollConfigResetButton() {
   if (!pressed) {
     if (buttonWasPressed) {
       const unsigned long pressDuration = now - buttonPressedAt;
-      buttonWasPressed = false;
-      buttonPressedAt = 0;
-      if (pressDuration >= CONFIG_CLICK_MIN_MS &&
-          pressDuration < CONFIG_RESET_HOLD_MS) {
-        if (buttonClickCount > 0 &&
-            now - buttonClickWindowStartedAt > CONFIG_CLICK_WINDOW_MS)
-          buttonClickCount = 0;
-        if (buttonClickCount == 0)
-          buttonClickWindowStartedAt = now;
-        ++buttonClickCount;
-        LOGF_I("SETUP", "BOOT click %u/3", buttonClickCount);
+      buttonWasPressed = false; buttonPressedAt = 0;
+      if (pressDuration >= CONFIG_CLICK_MIN_MS && pressDuration < CONFIG_RESET_HOLD_MS) {
+        if (buttonClickCount > 0 && now - buttonClickWindowStartedAt > CONFIG_CLICK_WINDOW_MS) buttonClickCount = 0;
+        if (buttonClickCount == 0) buttonClickWindowStartedAt = now;
+        ++buttonClickCount; LOGF_I("SETUP", "BOOT click %u/3", buttonClickCount);
         if (buttonClickCount >= 3) {
           File marker = LittleFS.open(EDIT_REQUEST_PATH, "w");
-          if (!marker) {
-            LOG_E("SETUP", "Unable to store configuration edit request");
-            buttonClickCount = 0;
-            return;
-          }
-          marker.print('1');
-          marker.close();
-          LOG_I("SETUP", "Opening stored configuration after restart");
-          delay(250);
-          ESP.restart();
+          if (!marker) { LOG_E("SETUP", "Unable to store configuration edit request"); buttonClickCount = 0; return; }
+          marker.print('1'); marker.close(); LOG_I("SETUP", "Opening stored configuration after restart"); delay(250); ESP.restart();
         }
       }
-    } else if (buttonClickCount > 0 &&
-               now - buttonClickWindowStartedAt > CONFIG_CLICK_WINDOW_MS) {
-      buttonClickCount = 0;
-    }
+    } else if (buttonClickCount > 0 && now - buttonClickWindowStartedAt > CONFIG_CLICK_WINDOW_MS) buttonClickCount = 0;
     return;
   }
-  if (!buttonWasPressed) {
-    buttonWasPressed = true;
-    buttonPressedAt = now;
-    return;
-  }
-  if (now - buttonPressedAt < CONFIG_RESET_HOLD_MS)
-    return;
-
+  if (!buttonWasPressed) { buttonWasPressed = true; buttonPressedAt = now; return; }
+  if (now - buttonPressedAt < CONFIG_RESET_HOLD_MS) return;
   LOG_W("SETUP", "BOOT held: removing stored configuration and restarting");
-  stopServices();
-  removeIfExists(CONFIG_PATH);
-  removeIfExists(CONFIG_TEMP);
-  removeIfExists(CONFIG_BACKUP);
-  removeIfExists(KEY_PATH);
-  removeIfExists(KEY_TEMP);
-  removeIfExists(PUBLIC_KEY_PATH);
-  removeIfExists(PUBLIC_KEY_TEMP);
-  removeIfExists(EDIT_REQUEST_PATH);
-  removeIfExists(MINIS_CONFIG_PATH);
-  removeIfExists(MINIS_CONFIG_TEMP_PATH);
-  removeIfExists(MINIS_CONFIG_BACKUP_PATH);
-  delay(250);
-  ESP.restart();
+  stopServices(); removeIfExists(CONFIG_PATH); removeIfExists(CONFIG_TEMP); removeIfExists(CONFIG_BACKUP); removeIfExists(KEY_PATH); removeIfExists(KEY_TEMP); removeIfExists(PUBLIC_KEY_PATH); removeIfExists(PUBLIC_KEY_TEMP); removeIfExists(EDIT_REQUEST_PATH); removeIfExists(MINIS_CONFIG_PATH); removeIfExists(MINIS_CONFIG_TEMP_PATH); removeIfExists(MINIS_CONFIG_BACKUP_PATH); delay(250); ESP.restart();
 #endif
 }
 void loop() {
-  if (mode == PortalMode::Wifi && dns)
-    dns->processNextRequest();
-  if (server)
-    server->handleClient();
+  if (mode == PortalMode::Wifi && dns) dns->processNextRequest();
+  if (server) server->handleClient();
   if (transitionPending && millis() - transitionAt >= 2500) {
-    transitionPending = false;
-    stopServices();
-    WiFi.softAPdisconnect(true);
-    WiFi.mode(WIFI_STA);
-    if (!startDevicePortalInternal())
-      LOG_E("SETUP", "Unable to start tunnel setup page");
+    transitionPending = false; stopServices(); WiFi.softAPdisconnect(true); WiFi.mode(WIFI_STA);
+    if (!startDevicePortalInternal()) LOG_E("SETUP", "Unable to start tunnel setup page");
   }
   delay(2);
 }
