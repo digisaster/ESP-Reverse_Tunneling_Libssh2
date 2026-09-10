@@ -7,6 +7,7 @@
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/ecp.h>
 #include <mbedtls/entropy.h>
+#include <mbedtls/error.h>
 #include <mbedtls/pk.h>
 
 namespace ssh_key_provisioning {
@@ -23,6 +24,13 @@ constexpr size_t OPENSSH_BASE64_BUFFER_SIZE = 256;
 void removeIfExists(const char *path) {
   if (LittleFS.exists(path))
     LittleFS.remove(path);
+}
+
+void logMbedTlsError(const char *stage, int errorCode) {
+  char text[160] = {0};
+  mbedtls_strerror(errorCode, text, sizeof(text));
+  LOGF_E("KEY", "%s failed: mbedTLS error -0x%04X (%s)", stage,
+         static_cast<unsigned int>(-errorCode), text);
 }
 
 bool writeFile(const char *path, const String &value) {
@@ -100,14 +108,23 @@ bool buildOpenSshPublicKey(mbedtls_pk_context &pk, String &publicKey) {
   unsigned char derBuffer[PUBLIC_DER_BUFFER_SIZE] = {0};
   const int derLength =
       mbedtls_pk_write_pubkey_der(&pk, derBuffer, sizeof(derBuffer));
-  if (derLength <= 0 || static_cast<size_t>(derLength) > sizeof(derBuffer))
+  if (derLength <= 0) {
+    logMbedTlsError("Public-key DER export", derLength);
     return false;
+  }
+  if (static_cast<size_t>(derLength) > sizeof(derBuffer)) {
+    LOGF_E("KEY", "Public-key DER export too large: %d bytes", derLength);
+    return false;
+  }
 
   const unsigned char *der =
       derBuffer + sizeof(derBuffer) - static_cast<size_t>(derLength);
   unsigned char point[65] = {0};
-  if (!extractP256PointFromSpki(der, static_cast<size_t>(derLength), point))
+  if (!extractP256PointFromSpki(der, static_cast<size_t>(derLength), point)) {
+    LOGF_E("KEY", "Unable to extract P-256 point from %d-byte public DER",
+           derLength);
     return false;
+  }
 
   static constexpr char ALGORITHM[] = "ecdsa-sha2-nistp256";
   static constexpr char CURVE[] = "nistp256";
@@ -119,14 +136,19 @@ bool buildOpenSshPublicKey(mbedtls_pk_context &pk, String &publicKey) {
       !appendBytes(blob, sizeof(blob), blobLength,
                    reinterpret_cast<const unsigned char *>(CURVE),
                    sizeof(CURVE) - 1) ||
-      !appendBytes(blob, sizeof(blob), blobLength, point, sizeof(point)))
+      !appendBytes(blob, sizeof(blob), blobLength, point, sizeof(point))) {
+    LOG_E("KEY", "Unable to construct OpenSSH ECDSA public-key blob");
     return false;
+  }
 
   unsigned char encoded[OPENSSH_BASE64_BUFFER_SIZE] = {0};
   size_t encodedLength = 0;
-  if (mbedtls_base64_encode(encoded, sizeof(encoded) - 1, &encodedLength, blob,
-                            blobLength) != 0)
+  const int result = mbedtls_base64_encode(encoded, sizeof(encoded) - 1,
+                                            &encodedLength, blob, blobLength);
+  if (result != 0) {
+    logMbedTlsError("OpenSSH public-key base64 encoding", result);
     return false;
+  }
   encoded[encodedLength] = '\0';
 
   publicKey = String(ALGORITHM) + " " +
@@ -142,29 +164,60 @@ bool generateKeyPair(String &privateKey, String &publicKey) {
   mbedtls_ctr_drbg_init(&ctrDrbg);
   mbedtls_pk_init(&pk);
 
+  bool success = false;
   static constexpr char PERSONALIZATION[] = "esp32tun-ssh-p256";
+
   int result = mbedtls_ctr_drbg_seed(
       &ctrDrbg, mbedtls_entropy_func, &entropy,
       reinterpret_cast<const unsigned char *>(PERSONALIZATION),
       sizeof(PERSONALIZATION) - 1);
-  if (result == 0)
-    result = mbedtls_pk_setup(&pk, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY));
-  if (result == 0)
-    result = mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP256R1, mbedtls_pk_ec(pk),
-                                 mbedtls_ctr_drbg_random, &ctrDrbg);
+  if (result != 0) {
+    logMbedTlsError("CTR_DRBG seed", result);
+    goto cleanup;
+  }
+  LOG_I("KEY", "CTR_DRBG seeded");
 
-  unsigned char privatePem[PRIVATE_PEM_BUFFER_SIZE] = {0};
-  if (result == 0)
+  result = mbedtls_pk_setup(&pk, mbedtls_pk_info_from_type(MBEDTLS_PK_ECKEY));
+  if (result != 0) {
+    logMbedTlsError("EC key context setup", result);
+    goto cleanup;
+  }
+  LOG_I("KEY", "EC key context initialized");
+
+  result = mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP256R1, mbedtls_pk_ec(pk),
+                               mbedtls_ctr_drbg_random, &ctrDrbg);
+  if (result != 0) {
+    logMbedTlsError("ECDSA P-256 key generation", result);
+    goto cleanup;
+  }
+  LOG_I("KEY", "ECDSA P-256 key material generated");
+
+  {
+    unsigned char privatePem[PRIVATE_PEM_BUFFER_SIZE] = {0};
     result = mbedtls_pk_write_key_pem(&pk, privatePem, sizeof(privatePem));
-  if (result == 0)
+    if (result != 0) {
+      logMbedTlsError("Private-key PEM export", result);
+      goto cleanup;
+    }
     privateKey = String(reinterpret_cast<const char *>(privatePem));
-  if (result == 0 && !buildOpenSshPublicKey(pk, publicKey))
-    result = -1;
+  }
+  LOGF_I("KEY", "Private-key PEM exported (%u bytes)",
+         static_cast<unsigned int>(privateKey.length()));
 
+  if (!buildOpenSshPublicKey(pk, publicKey)) {
+    LOG_E("KEY", "OpenSSH public-key construction failed");
+    goto cleanup;
+  }
+  LOGF_I("KEY", "OpenSSH public key constructed (%u bytes)",
+         static_cast<unsigned int>(publicKey.length()));
+
+  success = !privateKey.isEmpty() && !publicKey.isEmpty();
+
+cleanup:
   mbedtls_pk_free(&pk);
   mbedtls_ctr_drbg_free(&ctrDrbg);
   mbedtls_entropy_free(&entropy);
-  return result == 0 && !privateKey.isEmpty() && !publicKey.isEmpty();
+  return success;
 }
 
 bool persistKeyPair(const String &privateKey, const String &publicKey) {
