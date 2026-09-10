@@ -28,6 +28,9 @@ bool startDeviceSetup(DeviceRuntimeConfig &config);
 // Persists managed tunnel fields without replacing the separately stored key
 // pair. The caller updates config only after validating the new runtime.
 bool saveManagedConfig(const DeviceRuntimeConfig &config);
+// Close the temporary setup portal after a managed configuration has been
+// successfully activated. The portal remains available when activation fails.
+void finishManagedSetup();
 bool isActive();
 bool editRequested();
 void pollConfigResetButton();
