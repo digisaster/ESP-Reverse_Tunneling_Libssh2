@@ -50,6 +50,7 @@ void connectWiFi();
 void ensureMinisControlPlane();
 void reportStats();
 void configureSSHTunnel();
+void applyPendingOnboardingMinisConfig();
 void applyPendingMinisConfig();
 void configureMultiTunnelMappings();
 void registerTunnelCallbacks();
@@ -119,12 +120,13 @@ void setup() {
   tunnelRuntimeReady = true;
   if (!deviceConfig.tunnelEnabled) {
     status_led::set(status_led::State::Disabled);
-    LOG_I("MAIN", "Tunnel is disabled by stored managed configuration");
+    LOG_I("MAIN", "Setup completed with tunnel disabled by managed configuration");
   } else if (!tunnel.connectSSH()) {
     status_led::set(status_led::State::Error);
-    LOG_E("MAIN", "Failed to connect SSH tunnel");
+    LOG_W("MAIN", "Setup completed, but the SSH tunnel is not connected; retry logic remains active");
+  } else {
+    LOG_I("MAIN", "Setup completed successfully");
   }
-  LOG_I("MAIN", "Setup completed successfully");
 }
 
 void loop() {
@@ -133,9 +135,12 @@ void loop() {
   if (wifi_provisioning::isActive()) {
     wifi_provisioning::loop();
     // As soon as first-boot WiFi provisioning succeeds, bring up the Minis
-    // control plane and provision a local SSH identity while the device setup
-    // page is still active.
+    // control plane and provision a local SSH identity while the setup page
+    // remains available as a fallback. A fresh valid Minis config gets the
+    // first chance to activate the tunnel automatically.
     ensureMinisControlPlane();
+    if (!deviceConfig.setupComplete && !wifi_provisioning::editRequested())
+      applyPendingOnboardingMinisConfig();
     return;
   }
   if (!tunnelRuntimeReady) {
@@ -252,6 +257,87 @@ void configureSSHTunnel() {
   LOG_I("CONFIG", "Configuration complete");
 }
 
+void applyPendingOnboardingMinisConfig() {
+  minis_registration::ManagedTunnelConfig managed;
+  if (!minis_registration::takeManagedTunnelConfig(managed))
+    return;
+
+  if (deviceConfig.sshAuthMethod != SSHAuthMethod::PrivateKey ||
+      deviceConfig.sshPrivateKey.isEmpty()) {
+    LOG_W("MINIS", "Fresh managed config received, but the local private key is unavailable; setup page remains available");
+    return;
+  }
+
+  DeviceRuntimeConfig next = deviceConfig;
+  next.setupComplete = true;
+  next.tunnelEnabled = managed.enabled;
+  next.sshHost = managed.sshHost;
+  next.sshPort = managed.sshPort;
+  next.sshUsername = minis_registration::sid();
+  next.remoteBindHost = managed.remoteBindHost;
+  next.remoteBindPort = managed.remoteBindPort;
+  next.localHost = managed.localHost;
+  next.localPort = managed.localPort;
+
+  LOGF_I("MINIS", "Fresh managed config received during setup; attempting tunnel: enabled=%s ssh=%s@%s:%u remote=%s:%u local=%s:%u",
+         next.tunnelEnabled ? "yes" : "no", next.sshUsername.c_str(),
+         next.sshHost.c_str(), static_cast<unsigned int>(next.sshPort),
+         next.remoteBindHost.c_str(),
+         static_cast<unsigned int>(next.remoteBindPort), next.localHost.c_str(),
+         static_cast<unsigned int>(next.localPort));
+
+  if (tunnelRuntimeReady)
+    tunnel.disconnect();
+
+  globalSSHConfig.setSSHKeyAuthFromMemory(
+      next.sshHost, next.sshPort, next.sshUsername, next.sshPrivateKey,
+      next.sshPublicKey, next.sshKeyPassphrase);
+  globalSSHConfig.setTunnelConfig(next.remoteBindHost, next.remoteBindPort,
+                                  next.localHost, next.localPort);
+#if SSH_TUNNEL_LOW_MEMORY_PROFILE
+  globalSSHConfig.setMaxReverseListeners(1);
+#endif
+  globalSSHConfig.setConnectionConfig(30, 5000, 5, 30);
+  globalSSHConfig.setBufferConfig(TUNNEL_TRANSPORT_BUFFER_SIZE,
+                                  TUNNEL_MAX_CHANNELS, 1800000,
+                                  TUNNEL_RING_BUFFER_SIZE);
+  globalSSHConfig.setDebugConfig(true, 115200);
+  registerTunnelCallbacks();
+
+  if (!tunnelRuntimeReady) {
+    if (!tunnel.init()) {
+      status_led::set(status_led::State::Error);
+      LOG_E("MINIS", "Managed onboarding tunnel could not initialize; setup page remains available");
+      return;
+    }
+    tunnelRuntimeReady = true;
+  }
+
+  bool activated = true;
+  if (next.tunnelEnabled) {
+    status_led::set(status_led::State::Connecting);
+    activated = tunnel.connectSSH();
+  }
+  if (!activated) {
+    status_led::set(status_led::State::Error);
+    LOG_W("MINIS", "Managed onboarding tunnel activation failed; setup page remains available for fallback");
+    return;
+  }
+
+  if (!wifi_provisioning::saveManagedConfig(next)) {
+    tunnel.disconnect();
+    status_led::set(status_led::State::Error);
+    LOG_E("MINIS", "Managed onboarding tunnel worked but could not be stored; setup page remains available");
+    return;
+  }
+
+  LOG_I("MINIS", next.tunnelEnabled
+                    ? "Managed onboarding tunnel activated and stored; restarting into managed mode"
+                    : "Managed onboarding configuration stored with tunnel disabled; restarting into managed mode");
+  delay(250);
+  ESP.restart();
+}
+
 void applyPendingMinisConfig() {
   minis_registration::ManagedTunnelConfig managed;
   if (!minis_registration::takeManagedTunnelConfig(managed))
@@ -267,7 +353,23 @@ void applyPendingMinisConfig() {
       deviceConfig.localHost == managed.localHost &&
       deviceConfig.localPort == managed.localPort;
   if (alreadyActive) {
-    LOG_I("MINIS", "Managed tunnel config is already active");
+    if (!managed.enabled) {
+      LOG_I("MINIS", "Managed tunnel config is already active and disabled");
+      return;
+    }
+    if (tunnel.isConnected()) {
+      LOG_I("MINIS", "Managed tunnel config is already active");
+      return;
+    }
+
+    LOG_W("MINIS", "Managed config matches stored settings but tunnel is disconnected; reconnecting");
+    status_led::set(status_led::State::Connecting);
+    if (tunnel.connectSSH())
+      LOG_I("MINIS", "Managed tunnel reconnect succeeded");
+    else {
+      status_led::set(status_led::State::Error);
+      LOG_W("MINIS", "Managed tunnel reconnect failed; next config check may retry");
+    }
     return;
   }
   const SSHServerConfig previousSsh = globalSSHConfig.getSSHConfig();
