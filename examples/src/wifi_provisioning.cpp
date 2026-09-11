@@ -52,9 +52,6 @@ bool configEditRequested = false;
 
 void sampleConfigButton() {
 #if ESP32TUN_CONFIG_BUTTON_PIN >= 0
-  // Once a complete gesture has been captured, freeze detection until the
-  // main task has processed it. This avoids repeated actions while BOOT is
-  // still held and keeps filesystem/webserver work out of this task.
   if (pendingButtonAction != ButtonAction::None)
     return;
 
@@ -500,9 +497,6 @@ bool isActive() { return mode != PortalMode::None; }
 bool editRequested() { return configEditRequested; }
 void pollConfigResetButton() {
 #if ESP32TUN_CONFIG_BUTTON_PIN >= 0
-  // The dedicated monitor task captures gestures even while connectSSH() or
-  // another operation blocks the main loop. If task creation failed, retain
-  // the original loop-polling behavior as a fallback.
   if (!buttonTaskStarted)
     sampleConfigButton();
 
@@ -538,7 +532,7 @@ void pollConfigResetButton() {
     ESP.restart();
   }
 
-  LOG_W("SETUP", "BOOT held: removing stored configuration and restarting");
+  LOG_W("SETUP", "BOOT held: removing stored configuration, WiFi credentials, and restarting");
   stopServices();
   removeIfExists(CONFIG_PATH);
   removeIfExists(CONFIG_TEMP);
@@ -551,7 +545,13 @@ void pollConfigResetButton() {
   removeIfExists(MINIS_CONFIG_PATH);
   removeIfExists(MINIS_CONFIG_TEMP_PATH);
   removeIfExists(MINIS_CONFIG_BACKUP_PATH);
-  delay(250);
+
+  // A true factory reset must also forget credentials persisted by the ESP32
+  // WiFi stack in NVS. Keep this separate from normal edit/restart behavior.
+  WiFi.disconnect(false, true);
+  delay(100);
+  WiFi.mode(WIFI_OFF);
+  delay(150);
   ESP.restart();
 #endif
 }
