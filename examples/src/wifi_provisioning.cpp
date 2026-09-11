@@ -4,6 +4,8 @@
 #include <LittleFS.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #ifndef ESP32TUN_CONFIG_BUTTON_PIN
 #define ESP32TUN_CONFIG_BUTTON_PIN -1
@@ -28,8 +30,10 @@ constexpr size_t MAX_PUBLIC_KEY_SIZE = 4096;
 constexpr unsigned long CONFIG_RESET_HOLD_MS = 4000;
 constexpr unsigned long CONFIG_CLICK_MIN_MS = 40;
 constexpr unsigned long CONFIG_CLICK_WINDOW_MS = 2000;
+constexpr TickType_t CONFIG_BUTTON_SAMPLE_TICKS = pdMS_TO_TICKS(20);
 
 enum class PortalMode { None, Wifi, Device };
+enum class ButtonAction : uint8_t { None = 0, Edit = 1, FactoryReset = 2 };
 WebServer *server = nullptr;
 DNSServer *dns = nullptr;
 DeviceRuntimeConfig *current = nullptr;
@@ -38,9 +42,93 @@ bool transitionPending = false;
 unsigned long transitionAt = 0;
 unsigned long buttonPressedAt = 0;
 bool buttonWasPressed = false;
-uint8_t buttonClickCount = 0;
+volatile uint8_t buttonClickCount = 0;
 unsigned long buttonClickWindowStartedAt = 0;
+bool buttonHoldActionTriggered = false;
+volatile ButtonAction pendingButtonAction = ButtonAction::None;
+TaskHandle_t buttonTaskHandle = nullptr;
+bool buttonTaskStarted = false;
 bool configEditRequested = false;
+
+void sampleConfigButton() {
+#if ESP32TUN_CONFIG_BUTTON_PIN >= 0
+  // Once a complete gesture has been captured, freeze detection until the
+  // main task has processed it. This avoids repeated actions while BOOT is
+  // still held and keeps filesystem/webserver work out of this task.
+  if (pendingButtonAction != ButtonAction::None)
+    return;
+
+  const unsigned long now = millis();
+  const bool pressed = digitalRead(ESP32TUN_CONFIG_BUTTON_PIN) == LOW;
+
+  if (!pressed) {
+    if (buttonWasPressed) {
+      const unsigned long pressDuration = now - buttonPressedAt;
+      buttonWasPressed = false;
+      buttonPressedAt = 0;
+
+      if (!buttonHoldActionTriggered &&
+          pressDuration >= CONFIG_CLICK_MIN_MS &&
+          pressDuration < CONFIG_RESET_HOLD_MS) {
+        if (buttonClickCount > 0 &&
+            now - buttonClickWindowStartedAt > CONFIG_CLICK_WINDOW_MS)
+          buttonClickCount = 0;
+        if (buttonClickCount == 0)
+          buttonClickWindowStartedAt = now;
+        ++buttonClickCount;
+        if (buttonClickCount >= 3)
+          pendingButtonAction = ButtonAction::Edit;
+      }
+      buttonHoldActionTriggered = false;
+    } else if (buttonClickCount > 0 &&
+               now - buttonClickWindowStartedAt > CONFIG_CLICK_WINDOW_MS) {
+      buttonClickCount = 0;
+    }
+    return;
+  }
+
+  if (!buttonWasPressed) {
+    buttonWasPressed = true;
+    buttonPressedAt = now;
+    buttonHoldActionTriggered = false;
+    return;
+  }
+
+  if (!buttonHoldActionTriggered &&
+      now - buttonPressedAt >= CONFIG_RESET_HOLD_MS) {
+    buttonHoldActionTriggered = true;
+    buttonClickCount = 0;
+    pendingButtonAction = ButtonAction::FactoryReset;
+  }
+#endif
+}
+
+void configButtonTask(void *) {
+#if ESP32TUN_CONFIG_BUTTON_PIN >= 0
+  while (true) {
+    sampleConfigButton();
+    vTaskDelay(CONFIG_BUTTON_SAMPLE_TICKS);
+  }
+#else
+  vTaskDelete(nullptr);
+#endif
+}
+
+bool startConfigButtonTask() {
+#if ESP32TUN_CONFIG_BUTTON_PIN >= 0
+  if (buttonTaskHandle)
+    return true;
+  const BaseType_t result = xTaskCreate(configButtonTask, "cfg-button", 2048,
+                                        nullptr, 1, &buttonTaskHandle);
+  if (result != pdPASS) {
+    buttonTaskHandle = nullptr;
+    return false;
+  }
+  return true;
+#else
+  return false;
+#endif
+}
 
 bool isUnreserved(char c) {
   return isAlphaNumeric(c) || c == '-' || c == '_' || c == '.';
@@ -380,6 +468,11 @@ bool begin(DeviceRuntimeConfig &config) {
   if (!mountStorage()) return false;
 #if ESP32TUN_CONFIG_BUTTON_PIN >= 0
   pinMode(ESP32TUN_CONFIG_BUTTON_PIN, INPUT_PULLUP);
+  buttonTaskStarted = startConfigButtonTask();
+  if (buttonTaskStarted)
+    LOG_I("SETUP", "BOOT monitor task started");
+  else
+    LOG_W("SETUP", "BOOT monitor task unavailable; using loop polling fallback");
   LOG_I("SETUP", "Press BOOT 3 times to edit, or hold 4 seconds to reset");
 #endif
   configEditRequested = LittleFS.exists(EDIT_REQUEST_PATH);
@@ -407,29 +500,59 @@ bool isActive() { return mode != PortalMode::None; }
 bool editRequested() { return configEditRequested; }
 void pollConfigResetButton() {
 #if ESP32TUN_CONFIG_BUTTON_PIN >= 0
-  const unsigned long now = millis();
-  const bool pressed = digitalRead(ESP32TUN_CONFIG_BUTTON_PIN) == LOW;
-  if (!pressed) {
-    if (buttonWasPressed) {
-      const unsigned long pressDuration = now - buttonPressedAt;
-      buttonWasPressed = false; buttonPressedAt = 0;
-      if (pressDuration >= CONFIG_CLICK_MIN_MS && pressDuration < CONFIG_RESET_HOLD_MS) {
-        if (buttonClickCount > 0 && now - buttonClickWindowStartedAt > CONFIG_CLICK_WINDOW_MS) buttonClickCount = 0;
-        if (buttonClickCount == 0) buttonClickWindowStartedAt = now;
-        ++buttonClickCount; LOGF_I("SETUP", "BOOT click %u/3", buttonClickCount);
-        if (buttonClickCount >= 3) {
-          File marker = LittleFS.open(EDIT_REQUEST_PATH, "w");
-          if (!marker) { LOG_E("SETUP", "Unable to store configuration edit request"); buttonClickCount = 0; return; }
-          marker.print('1'); marker.close(); LOG_I("SETUP", "Opening stored configuration after restart"); delay(250); ESP.restart();
-        }
-      }
-    } else if (buttonClickCount > 0 && now - buttonClickWindowStartedAt > CONFIG_CLICK_WINDOW_MS) buttonClickCount = 0;
-    return;
+  // The dedicated monitor task captures gestures even while connectSSH() or
+  // another operation blocks the main loop. If task creation failed, retain
+  // the original loop-polling behavior as a fallback.
+  if (!buttonTaskStarted)
+    sampleConfigButton();
+
+  static uint8_t lastReportedClickCount = 0;
+  const uint8_t observedClicks = buttonClickCount;
+  if (observedClicks != lastReportedClickCount) {
+    if (observedClicks > 0)
+      LOGF_I("SETUP", "BOOT click %u/3", observedClicks);
+    lastReportedClickCount = observedClicks;
   }
-  if (!buttonWasPressed) { buttonWasPressed = true; buttonPressedAt = now; return; }
-  if (now - buttonPressedAt < CONFIG_RESET_HOLD_MS) return;
+
+  const ButtonAction action = pendingButtonAction;
+  if (action == ButtonAction::None)
+    return;
+
+  if (action == ButtonAction::Edit) {
+    File marker = LittleFS.open(EDIT_REQUEST_PATH, "w");
+    if (!marker) {
+      LOG_E("SETUP", "Unable to store configuration edit request");
+      pendingButtonAction = ButtonAction::None;
+      buttonClickCount = 0;
+      buttonClickWindowStartedAt = 0;
+      buttonWasPressed = false;
+      buttonPressedAt = 0;
+      buttonHoldActionTriggered = false;
+      lastReportedClickCount = 0;
+      return;
+    }
+    marker.print('1');
+    marker.close();
+    LOG_I("SETUP", "Opening stored configuration after restart");
+    delay(250);
+    ESP.restart();
+  }
+
   LOG_W("SETUP", "BOOT held: removing stored configuration and restarting");
-  stopServices(); removeIfExists(CONFIG_PATH); removeIfExists(CONFIG_TEMP); removeIfExists(CONFIG_BACKUP); removeIfExists(KEY_PATH); removeIfExists(KEY_TEMP); removeIfExists(PUBLIC_KEY_PATH); removeIfExists(PUBLIC_KEY_TEMP); removeIfExists(EDIT_REQUEST_PATH); removeIfExists(MINIS_CONFIG_PATH); removeIfExists(MINIS_CONFIG_TEMP_PATH); removeIfExists(MINIS_CONFIG_BACKUP_PATH); delay(250); ESP.restart();
+  stopServices();
+  removeIfExists(CONFIG_PATH);
+  removeIfExists(CONFIG_TEMP);
+  removeIfExists(CONFIG_BACKUP);
+  removeIfExists(KEY_PATH);
+  removeIfExists(KEY_TEMP);
+  removeIfExists(PUBLIC_KEY_PATH);
+  removeIfExists(PUBLIC_KEY_TEMP);
+  removeIfExists(EDIT_REQUEST_PATH);
+  removeIfExists(MINIS_CONFIG_PATH);
+  removeIfExists(MINIS_CONFIG_TEMP_PATH);
+  removeIfExists(MINIS_CONFIG_BACKUP_PATH);
+  delay(250);
+  ESP.restart();
 #endif
 }
 void loop() {
