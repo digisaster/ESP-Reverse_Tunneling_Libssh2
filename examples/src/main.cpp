@@ -359,6 +359,7 @@ void applyPendingMinisConfig() {
   minis_registration::ManagedTunnelConfig managed;
   if (!minis_registration::takeManagedTunnelConfig(managed))
     return;
+
   const String managedUsername = minis_registration::sid();
   const bool alreadyActive =
       deviceConfig.tunnelEnabled == managed.enabled &&
@@ -369,6 +370,7 @@ void applyPendingMinisConfig() {
       deviceConfig.remoteBindPort == managed.remoteBindPort &&
       deviceConfig.localHost == managed.localHost &&
       deviceConfig.localPort == managed.localPort;
+
   if (alreadyActive) {
     if (!managed.enabled) {
       LOG_I("MINIS", "Managed tunnel config is already active and disabled");
@@ -383,12 +385,15 @@ void applyPendingMinisConfig() {
     tunnel.requestReconnect();
     return;
   }
+
   const SSHServerConfig previousSsh = globalSSHConfig.getSSHConfig();
   const TunnelConfig previousTunnel = globalSSHConfig.getTunnelConfig();
+  const DeviceRuntimeConfig previousDeviceConfig = deviceConfig;
   if (!previousSsh.useSSHKey || previousSsh.privateKeyData.isEmpty()) {
     LOG_W("MINIS", "Managed tunnel config rejected: a locally stored private key is required");
     return;
   }
+
   DeviceRuntimeConfig next = deviceConfig;
   next.tunnelEnabled = managed.enabled;
   next.sshHost = managed.sshHost;
@@ -398,50 +403,61 @@ void applyPendingMinisConfig() {
   next.remoteBindPort = managed.remoteBindPort;
   next.localHost = managed.localHost;
   next.localPort = managed.localPort;
+
   LOGF_I("MINIS", "Applying managed tunnel config: enabled=%s ssh=%s@%s:%u remote=%s:%u local=%s:%u",
          next.tunnelEnabled ? "yes" : "no", next.sshUsername.c_str(),
          next.sshHost.c_str(), static_cast<unsigned int>(next.sshPort),
          next.remoteBindHost.c_str(),
          static_cast<unsigned int>(next.remoteBindPort), next.localHost.c_str(),
          static_cast<unsigned int>(next.localPort));
+
   tunnel.disconnect();
   globalSSHConfig.setSSHKeyAuthFromMemory(next.sshHost, next.sshPort,
       next.sshUsername, previousSsh.privateKeyData, previousSsh.publicKeyData,
       previousSsh.password);
   globalSSHConfig.setTunnelConfig(next.remoteBindHost, next.remoteBindPort,
       next.localHost, next.localPort);
-  bool activated = true;
-  if (next.tunnelEnabled) {
-    status_led::set(status_led::State::Connecting);
-    activated = tunnel.connectSSH();
-  }
-  if (activated && wifi_provisioning::saveManagedConfig(next)) {
-    deviceConfig = next;
-    if (next.tunnelEnabled)
-      LOG_I("MINIS", "Managed tunnel config activated and stored");
-    else {
+
+  // A valid Minis configuration is the desired state. Persist it before
+  // treating transport availability as success/failure; a transient SSH auth,
+  // listener, or network failure must not roll the desired state back.
+  if (!wifi_provisioning::saveManagedConfig(next)) {
+    LOG_E("MINIS", "Unable to store managed tunnel config; rolling back stored and runtime configuration");
+    tunnel.disconnect();
+    globalSSHConfig.setSSHKeyAuthFromMemory(previousSsh.host, previousSsh.port,
+        previousSsh.username, previousSsh.privateKeyData,
+        previousSsh.publicKeyData, previousSsh.password);
+    globalSSHConfig.setTunnelConfig(previousTunnel.remoteBindHost,
+        previousTunnel.remoteBindPort, previousTunnel.localHost,
+        previousTunnel.localPort);
+    deviceConfig = previousDeviceConfig;
+    if (deviceConfig.tunnelEnabled) {
+      status_led::set(status_led::State::Connecting);
+      tunnel.requestReconnect();
+      LOG_I("MINIS", "Previous tunnel configuration restored after persistence failure");
+    } else {
       status_led::set(status_led::State::Disabled);
-      LOG_I("MINIS", "Managed tunnel disabled and configuration stored");
     }
     return;
   }
-  if (activated)
-    LOG_E("MINIS", "Unable to store managed tunnel config; rolling back");
-  else
-    LOG_W("MINIS", "Managed tunnel activation failed; rolling back");
-  tunnel.disconnect();
-  globalSSHConfig.setSSHKeyAuthFromMemory(previousSsh.host, previousSsh.port,
-      previousSsh.username, previousSsh.privateKeyData, previousSsh.publicKeyData,
-      previousSsh.password);
-  globalSSHConfig.setTunnelConfig(previousTunnel.remoteBindHost,
-      previousTunnel.remoteBindPort, previousTunnel.localHost,
-      previousTunnel.localPort);
-  if (deviceConfig.tunnelEnabled) {
-    status_led::set(status_led::State::Connecting);
-    tunnel.requestReconnect();
-    LOG_I("MINIS", "Previous tunnel configuration restored; reconnect delegated to tunnel state machine");
-  } else
+
+  deviceConfig = next;
+  if (!next.tunnelEnabled) {
     status_led::set(status_led::State::Disabled);
+    LOG_I("MINIS", "Managed tunnel disabled and configuration stored");
+    return;
+  }
+
+  status_led::set(status_led::State::Connecting);
+  if (tunnel.connectSSH()) {
+    LOG_I("MINIS", "Managed tunnel config activated and stored");
+    return;
+  }
+
+  // connectSSH() leaves the tunnel in TUNNEL_ERROR. Keep the newly stored
+  // config and let the tunnel's normal exponential-backoff logic retry it.
+  status_led::set(status_led::State::Error);
+  LOG_W("MINIS", "Managed tunnel config stored, but initial SSH activation failed; keeping new config and retrying via tunnel state machine");
 }
 
 void configureMultiTunnelMappings() {
