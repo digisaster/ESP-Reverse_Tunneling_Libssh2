@@ -31,4 +31,13 @@ bool startHeartbeatTask();
 // Returns the latest complete config received from Minis, if one is waiting.
 bool takeManagedTunnelConfig(ManagedTunnelConfig &config);
 
+// TLS on the C3 can temporarily run out of contiguous heap while libssh2 is
+// active. The Minis background task never manipulates the SSH tunnel directly;
+// instead it requests a short maintenance window from the main task. The main
+// task disconnects the tunnel, confirms the pause, and later consumes the
+// resume request so normal tunnel reconnection remains single-threaded.
+bool tunnelPauseRequestedForControlPlane();
+void confirmTunnelPausedForControlPlane();
+bool takeTunnelResumeRequest();
+
 } // namespace minis_registration
