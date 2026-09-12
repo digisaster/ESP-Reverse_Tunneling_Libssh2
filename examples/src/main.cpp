@@ -148,8 +148,25 @@ void loop() {
     LOG_W("MAIN", "WiFi disconnected, reconnecting...");
     connectWiFi();
   }
+
+  if (minis_registration::tunnelPauseRequestedForControlPlane()) {
+    if (tunnel.getState() != TUNNEL_DISCONNECTED) {
+      LOG_W("MINIS", "Pausing SSH tunnel temporarily to free heap for control-plane TLS");
+      tunnel.disconnect();
+    }
+    minis_registration::confirmTunnelPausedForControlPlane();
+    vTaskDelay(pdMS_TO_TICKS(20));
+    return;
+  }
+
   ensureMinisControlPlane();
+  const bool resumeTunnel = minis_registration::takeTunnelResumeRequest();
   applyPendingMinisConfig();
+  if (resumeTunnel && deviceConfig.tunnelEnabled && !tunnel.isConnected()) {
+    status_led::set(status_led::State::Connecting);
+    tunnel.requestReconnect();
+    LOG_I("MINIS", "Control-plane TLS window complete; tunnel reconnect delegated to state machine");
+  }
   tunnel.loop();
   reportStats();
   vTaskDelay(pdMS_TO_TICKS(1));
