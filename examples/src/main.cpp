@@ -325,6 +325,9 @@ void applyPendingOnboardingMinisConfig() {
   }
 
   deviceConfig = next;
+  deviceConfig.sshPrivateKey = "";
+  deviceConfig.sshPublicKey = "";
+  deviceConfig.sshKeyPassphrase = "";
   wifi_provisioning::finishManagedSetup();
   if (next.tunnelEnabled)
     status_led::set(status_led::State::Connected);
@@ -358,14 +361,9 @@ void applyPendingMinisConfig() {
       LOG_I("MINIS", "Managed tunnel config is already active");
       return;
     }
-    LOG_W("MINIS", "Managed config matches stored settings but tunnel is disconnected; reconnecting");
+    LOG_W("MINIS", "Managed config matches stored settings but tunnel is disconnected; reconnect delegated to tunnel state machine");
     status_led::set(status_led::State::Connecting);
-    if (tunnel.connectSSH())
-      LOG_I("MINIS", "Managed tunnel reconnect succeeded");
-    else {
-      status_led::set(status_led::State::Error);
-      LOG_W("MINIS", "Managed tunnel reconnect failed; next config check may retry");
-    }
+    tunnel.requestReconnect();
     return;
   }
   const SSHServerConfig previousSsh = globalSSHConfig.getSSHConfig();
@@ -423,12 +421,8 @@ void applyPendingMinisConfig() {
       previousTunnel.localPort);
   if (deviceConfig.tunnelEnabled) {
     status_led::set(status_led::State::Connecting);
-    if (tunnel.connectSSH())
-      LOG_I("MINIS", "Previous tunnel configuration restored");
-    else {
-      status_led::set(status_led::State::Error);
-      LOG_E("MINIS", "Previous tunnel configuration could not reconnect");
-    }
+    tunnel.requestReconnect();
+    LOG_I("MINIS", "Previous tunnel configuration restored; reconnect delegated to tunnel state machine");
   } else
     status_led::set(status_led::State::Disabled);
 }
