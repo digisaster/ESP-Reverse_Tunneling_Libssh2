@@ -51,6 +51,18 @@ public:
   // Disconnect everything (channels, session, socket).
   void disconnect();
 
+  // Queue a reconnect through the tunnel state machine. This does not connect
+  // immediately; loop() remains the single owner of retry timing/backoff.
+  void requestReconnect() {
+    if (state_ == TUNNEL_CONNECTED || state_ == TUNNEL_CONNECTING ||
+        state_ == TUNNEL_ERROR) {
+      return;
+    }
+    reconnectAttempts_ = 0;
+    lastConnectionAttempt_ = millis();
+    state_ = TUNNEL_ERROR;
+  }
+
   // True if SSH session is live.
   bool isConnected();
 
