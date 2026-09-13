@@ -792,34 +792,24 @@ bool SSHSession::authenticate(const SSHServerConfig &sshConfig) {
 
     int authResult = 0;
     String errorDetail;
-    for (int attempt = 0; attempt < 2; ++attempt) {
-      errorDetail = "";
-      if (lock(pdMS_TO_TICKS(1000))) {
-        authResult = libssh2_userauth_publickey_frommemory(
-            session_, sshConfig.username.c_str(), sshConfig.username.length(),
-            sshConfig.publicKeyData.isEmpty() ? nullptr
-                                              : sshConfig.publicKeyData.c_str(),
-            sshConfig.publicKeyData.length(), sshConfig.privateKeyData.c_str(),
-            sshConfig.privateKeyData.length(), passphrase);
-        if (authResult) {
-          char *errmsg = nullptr;
-          int errlen = 0;
-          libssh2_session_last_error(session_, &errmsg, &errlen, 0);
-          if (errmsg && errlen > 0)
-            errorDetail = String(errmsg).substring(0, errlen);
-        }
-        unlock();
-      } else {
-        LOG_E("SSH", "Session lock timeout during public key authentication");
-        return false;
+    if (lock(pdMS_TO_TICKS(1000))) {
+      authResult = libssh2_userauth_publickey_frommemory(
+          session_, sshConfig.username.c_str(), sshConfig.username.length(),
+          sshConfig.publicKeyData.isEmpty() ? nullptr
+                                            : sshConfig.publicKeyData.c_str(),
+          sshConfig.publicKeyData.length(), sshConfig.privateKeyData.c_str(),
+          sshConfig.privateKeyData.length(), passphrase);
+      if (authResult) {
+        char *errmsg = nullptr;
+        int errlen = 0;
+        libssh2_session_last_error(session_, &errmsg, &errlen, 0);
+        if (errmsg && errlen > 0)
+          errorDetail = String(errmsg).substring(0, errlen);
       }
-
-      if (authResult != LIBSSH2_ERROR_PUBLICKEY_UNVERIFIED ||
-          errorDetail != "Callback returned error" || attempt > 0) {
-        break;
-      }
-      LOG_W("SSH", "Transient public-key signing failure; retrying once");
-      vTaskDelay(pdMS_TO_TICKS(50));
+      unlock();
+    } else {
+      LOG_E("SSH", "Session lock timeout during public key authentication");
+      return false;
     }
 
     if (authResult == 0) {
