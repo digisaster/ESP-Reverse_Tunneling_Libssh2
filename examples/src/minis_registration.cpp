@@ -3,6 +3,7 @@
 #include "ESP-Reverse_Tunneling_Libssh2.h"
 #include <LittleFS.h>
 #include <WiFi.h>
+#include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <esp_heap_caps.h>
 #include <esp_random.h>
@@ -16,9 +17,11 @@ namespace minis_registration {
 namespace {
 
 constexpr const char *MINIS_HOST = "cloud.supcom.nl";
+constexpr uint16_t MINIS_HTTP_PORT = 80;
 constexpr uint16_t MINIS_HTTPS_PORT = 443;
 constexpr const char *MINIS_PATH = "/hb/";
-constexpr const char *MINIS_BASE_URL = "https://cloud.supcom.nl/hb/";
+constexpr const char *MINIS_HTTPS_BASE_URL = "https://cloud.supcom.nl/hb/";
+constexpr const char *MINIS_HTTP_BASE_URL = "http://cloud.supcom.nl/hb/";
 constexpr const char *MINIS_USER_AGENT = "MHB;vESP32";
 constexpr uint32_t MINIS_TIMEOUT_MS = 5000;
 constexpr uint16_t ONBOARDING_HEARTBEAT_INTERVAL_MIN = 2;
@@ -272,21 +275,51 @@ int performGet(const char *suffix, char *response, size_t responseCapacity,
   return status;
 }
 
+int performHeartbeatGet() {
+  WiFiClient client;
+  client.setTimeout(MINIS_TIMEOUT_MS);
+  if (!client.connect(MINIS_HOST, MINIS_HTTP_PORT, MINIS_TIMEOUT_MS)) {
+    return -1;
+  }
+
+  client.print(F("GET "));
+  client.print(MINIS_PATH);
+  client.print(sid());
+  client.print(F("/ping HTTP/1.1\r\nHost: "));
+  client.print(MINIS_HOST);
+  client.print(F("\r\nUser-Agent: "));
+  client.print(MINIS_USER_AGENT);
+  client.print(F("\r\nConnection: close\r\n\r\n"));
+
+  char line[96] = {0};
+  const size_t statusLength = client.readBytesUntil('\n', line, sizeof(line) - 1);
+  const int status = parseHttpStatus(line, statusLength);
+  client.stop();
+  return status;
+}
+
 bool sendHeartbeat(bool bootstrap) {
   if (WiFi.status() != WL_CONNECTED) {
     LOG_W("MINIS", "Heartbeat skipped: WiFi not connected");
     return false;
   }
+
   const String clientSid = sid();
-  const String url = String(MINIS_BASE_URL) + clientSid + "/";
+  const String url = String(bootstrap ? MINIS_HTTPS_BASE_URL : MINIS_HTTP_BASE_URL) +
+                     clientSid + (bootstrap ? "/" : "/ping");
   LOGF_I("MINIS", "%s GET: %s", bootstrap ? "Bootstrap" : "Heartbeat",
          url.c_str());
-  const int status = performGet("/", nullptr, 0, nullptr);
-  if (status > 0) {
+
+  const int status = bootstrap ? performGet("/", nullptr, 0, nullptr)
+                               : performHeartbeatGet();
+  const bool ok = bootstrap ? status > 0
+                            : (status == 200 || status == 204 || status == 404);
+  if (ok) {
     LOGF_I("MINIS", "%s HTTP status: %d",
            bootstrap ? "Bootstrap" : "Heartbeat", status);
     return true;
   }
+
   LOGF_W("MINIS", "%s request failed: %d",
          bootstrap ? "Bootstrap" : "Heartbeat", status);
   return false;
@@ -610,19 +643,16 @@ bool refreshConfig() {
   return processCandidateConfig(parsed, true);
 }
 
-bool runControlPlaneWithMemoryRecovery() {
+bool refreshConfigWithMemoryRecovery() {
   lastTlsMemoryPressure = false;
-  const bool heartbeatOk = sendHeartbeat(false);
-  if (heartbeatOk) {
-    refreshConfig();
+  if (refreshConfig()) {
     return true;
   }
   if (!lastTlsMemoryPressure) {
-    refreshConfig();
     return false;
   }
 
-  LOG_W("MINIS", "TLS heap pressure detected; requesting temporary SSH pause");
+  LOG_W("MINIS", "TLS heap pressure detected during config fetch; requesting temporary SSH pause");
   controlPlanePauseConfirmed = false;
   controlPlanePauseDeferred = false;
   controlPlanePauseRequested = true;
@@ -635,29 +665,27 @@ bool runControlPlaneWithMemoryRecovery() {
   if (controlPlanePauseDeferred) {
     controlPlanePauseRequested = false;
     controlPlanePauseDeferred = false;
-    LOG_I("MINIS", "Control-plane TLS retry deferred because an SSH channel is active");
+    LOG_I("MINIS", "Config TLS retry deferred because an SSH channel is active");
     return false;
   }
 
   if (!controlPlanePauseConfirmed) {
     controlPlanePauseRequested = false;
-    LOG_W("MINIS", "SSH pause request timed out; control-plane retry deferred");
+    LOG_W("MINIS", "SSH pause request timed out; config retry deferred");
     return false;
   }
 
   vTaskDelay(pdMS_TO_TICKS(100));
   logTlsHeap("after-ssh-pause");
-  const bool retryHeartbeatOk = sendHeartbeat(false);
-  if (retryHeartbeatOk) {
-    refreshConfig();
-  } else {
-    LOG_W("MINIS", "Control-plane retry still failed after SSH pause");
+  const bool retryConfigOk = refreshConfig();
+  if (!retryConfigOk) {
+    LOG_W("MINIS", "Config retry still failed after SSH pause");
   }
 
   controlPlanePauseRequested = false;
   controlPlanePauseConfirmed = false;
   controlPlaneResumeRequested = true;
-  return retryHeartbeatOk;
+  return retryConfigOk;
 }
 
 uint32_t nextHeartbeatDelaySeconds() {
@@ -669,12 +697,12 @@ uint32_t nextHeartbeatDelaySeconds() {
 void heartbeatTask(void *) {
   loadCachedConfig();
   vTaskDelay(pdMS_TO_TICKS(INITIAL_CONFIG_DELAY_MS));
-  refreshConfig();
+  refreshConfigWithMemoryRecovery();
   while (true) {
     const uint32_t delaySeconds = nextHeartbeatDelaySeconds();
-    LOGF_I("MINIS", "Next heartbeat/config check in %lu min %lu sec", static_cast<unsigned long>(delaySeconds / 60U), static_cast<unsigned long>(delaySeconds % 60U));
+    LOGF_I("MINIS", "Next heartbeat in %lu min %lu sec", static_cast<unsigned long>(delaySeconds / 60U), static_cast<unsigned long>(delaySeconds % 60U));
     vTaskDelay(pdMS_TO_TICKS(static_cast<uint64_t>(delaySeconds) * 1000ULL));
-    runControlPlaneWithMemoryRecovery();
+    sendHeartbeat(false);
   }
 }
 
