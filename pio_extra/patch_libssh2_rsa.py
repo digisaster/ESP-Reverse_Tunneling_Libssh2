@@ -1,10 +1,15 @@
-"""Patch the pinned libssh2_esp RSA in-memory key bugs.
+"""Patch pinned libssh2_esp key-handling bugs.
 
 libssh2_esp tag 1.1 increments the RSA modulus length after allocating the
 SSH public-key blob. A full-size RSA modulus therefore writes one byte beyond
 the allocation. It also copies a parsed private key into an uninitialized RSA
-context, which makes signing fail. Keep this strict and fail if the dependency
-no longer matches either the vulnerable or corrected form.
+context, which makes signing fail.
+
+Its ECDSA in-memory loader allocates one extra byte for PEM termination but
+never initializes that byte before passing data_len + 1 to mbedTLS. That can
+make the exact same EC private key parse intermittently depending on heap
+contents. Keep these patches strict and fail if the dependency no longer
+matches either the vulnerable or corrected form.
 """
 
 from pathlib import Path
@@ -118,6 +123,20 @@ initialized_public_key_result = """    int ret = 0;
     if(mbedtls_pk_get_type(pkey) != MBEDTLS_PK_RSA) {
 """
 
+unterminated_ecdsa_pem = """    memcpy(ntdata, data, data_len);
+
+    if(_libssh2_mbedtls_parse_eckey(ctx, &pkey, session,
+                                    ntdata, data_len + 1, pwd) == 0)
+"""
+terminated_ecdsa_pem = """    memcpy(ntdata, data, data_len);
+    ntdata[data_len] = '\\0';
+
+    if(_libssh2_mbedtls_parse_eckey(ctx, &pkey, session,
+                                    ntdata, data_len + 1, pwd) == 0)
+"""
+short_ecdsa_wipe = "    _libssh2_mbedtls_safe_free(ntdata, data_len);\n"
+full_ecdsa_wipe = "    _libssh2_mbedtls_safe_free(ntdata, data_len + 1);\n"
+
 if not dependency_source.is_file():
     raise RuntimeError(
         f"Cannot patch libssh2_esp: source file not found at {dependency_source}"
@@ -178,6 +197,24 @@ if diagnostic_sign_error not in source:
     source = source.replace(plain_sign_error, diagnostic_sign_error, 1)
     changed = True
 
+if terminated_ecdsa_pem not in source:
+    if source.count(unterminated_ecdsa_pem) != 1:
+        raise RuntimeError(
+            "Cannot patch libssh2_esp safely: the ECDSA in-memory loader "
+            "differs from the pinned 1.1 source"
+        )
+    source = source.replace(unterminated_ecdsa_pem, terminated_ecdsa_pem, 1)
+    changed = True
+
+if full_ecdsa_wipe not in source:
+    if source.count(short_ecdsa_wipe) != 1:
+        raise RuntimeError(
+            "Cannot patch libssh2_esp safely: the ECDSA temporary-key cleanup "
+            "differs from the pinned 1.1 source"
+        )
+    source = source.replace(short_ecdsa_wipe, full_ecdsa_wipe, 1)
+    changed = True
+
 if changed:
     dependency_source.write_text(source, encoding="utf-8", newline="\n")
-    print("Patched libssh2_esp RSA in-memory key handling")
+    print("Patched libssh2_esp RSA/ECDSA in-memory key handling")
