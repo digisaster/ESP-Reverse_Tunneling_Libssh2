@@ -16,6 +16,7 @@
 
 static constexpr size_t CRITICAL_FREE_HEAP_BYTES = 12 * 1024;
 static constexpr size_t CRITICAL_LARGEST_BLOCK_BYTES = 4 * 1024;
+static constexpr unsigned long STATS_INTERVAL = 10000;
 
 #ifndef SSH_TUNNEL_LOW_MEMORY_PROFILE
 #define SSH_TUNNEL_LOW_MEMORY_PROFILE 0
@@ -40,16 +41,15 @@ DeviceRuntimeConfig deviceConfig;
 bool tunnelRuntimeReady = false;
 bool minisBootstrapAttempted = false;
 bool minisHeartbeatStartAttempted = false;
-bool minisHeartbeatStarted = false;
 bool automaticIdentityAttempted = false;
 bool automaticPublicKeyUploadAttempted = false;
 unsigned long lastStatsReport = 0;
-const unsigned long STATS_INTERVAL = 10000;
 
 void connectWiFi();
 void ensureMinisControlPlane();
 void reportStats();
 void configureSSHTunnel();
+void configureCommonTunnelSettings();
 void applyPendingOnboardingMinisConfig();
 void applyPendingMinisConfig();
 void configureMultiTunnelMappings();
@@ -219,8 +219,8 @@ void ensureMinisControlPlane() {
 
   if (!minisHeartbeatStartAttempted) {
     minisHeartbeatStartAttempted = true;
-    minisHeartbeatStarted = minis_registration::startHeartbeatTask();
-    if (minisHeartbeatStarted)
+    const bool heartbeatStarted = minis_registration::startHeartbeatTask();
+    if (heartbeatStarted)
       LOG_I("MINIS", "Control-center heartbeat/config service started");
     else
       LOG_W("MAIN", "Minis heartbeat service could not be started");
@@ -240,6 +240,18 @@ void ensureMinisControlPlane() {
     if (!minis_public_key_upload::upload(deviceConfig.sshPublicKey))
       LOG_W("MAIN", "Automatic Minis public key upload did not complete");
   }
+}
+
+void configureCommonTunnelSettings() {
+#if SSH_TUNNEL_LOW_MEMORY_PROFILE
+  globalSSHConfig.setMaxReverseListeners(1);
+#endif
+  globalSSHConfig.setConnectionConfig(30, 5000, 5, 30);
+  globalSSHConfig.setBufferConfig(TUNNEL_TRANSPORT_BUFFER_SIZE,
+                                  TUNNEL_MAX_CHANNELS, 1800000,
+                                  TUNNEL_RING_BUFFER_SIZE);
+  globalSSHConfig.setDebugConfig(true, 115200);
+  registerTunnelCallbacks();
 }
 
 void configureSSHTunnel() {
@@ -263,14 +275,7 @@ void configureSSHTunnel() {
     globalSSHConfig.setTunnelConfig(deviceConfig.remoteBindHost,
         deviceConfig.remoteBindPort, deviceConfig.localHost,
         deviceConfig.localPort);
-#if SSH_TUNNEL_LOW_MEMORY_PROFILE
-  globalSSHConfig.setMaxReverseListeners(1);
-#endif
-  globalSSHConfig.setConnectionConfig(30, 5000, 5, 30);
-  globalSSHConfig.setBufferConfig(TUNNEL_TRANSPORT_BUFFER_SIZE,
-      TUNNEL_MAX_CHANNELS, 1800000, TUNNEL_RING_BUFFER_SIZE);
-  globalSSHConfig.setDebugConfig(true, 115200);
-  registerTunnelCallbacks();
+  configureCommonTunnelSettings();
   LOG_I("CONFIG", "Configuration complete");
 }
 
@@ -311,15 +316,7 @@ void applyPendingOnboardingMinisConfig() {
       next.sshPublicKey, next.sshKeyPassphrase);
   globalSSHConfig.setTunnelConfig(next.remoteBindHost, next.remoteBindPort,
                                   next.localHost, next.localPort);
-#if SSH_TUNNEL_LOW_MEMORY_PROFILE
-  globalSSHConfig.setMaxReverseListeners(1);
-#endif
-  globalSSHConfig.setConnectionConfig(30, 5000, 5, 30);
-  globalSSHConfig.setBufferConfig(TUNNEL_TRANSPORT_BUFFER_SIZE,
-                                  TUNNEL_MAX_CHANNELS, 1800000,
-                                  TUNNEL_RING_BUFFER_SIZE);
-  globalSSHConfig.setDebugConfig(true, 115200);
-  registerTunnelCallbacks();
+  configureCommonTunnelSettings();
 
   if (!tunnelRuntimeReady) {
     if (!tunnel.init()) {
