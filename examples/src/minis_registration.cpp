@@ -48,6 +48,7 @@ String candidateLocalHost;
 uint16_t candidateLocalPort = 0;
 volatile bool controlPlanePauseRequested = false;
 volatile bool controlPlanePauseConfirmed = false;
+volatile bool controlPlanePauseDeferred = false;
 volatile bool controlPlaneResumeRequested = false;
 volatile bool lastTlsMemoryPressure = false;
 
@@ -623,11 +624,21 @@ bool runControlPlaneWithMemoryRecovery() {
 
   LOG_W("MINIS", "TLS heap pressure detected; requesting temporary SSH pause");
   controlPlanePauseConfirmed = false;
+  controlPlanePauseDeferred = false;
   controlPlanePauseRequested = true;
   const unsigned long started = millis();
-  while (!controlPlanePauseConfirmed && millis() - started < CONTROL_PLANE_PAUSE_TIMEOUT_MS) {
+  while (!controlPlanePauseConfirmed && !controlPlanePauseDeferred &&
+         millis() - started < CONTROL_PLANE_PAUSE_TIMEOUT_MS) {
     vTaskDelay(pdMS_TO_TICKS(20));
   }
+
+  if (controlPlanePauseDeferred) {
+    controlPlanePauseRequested = false;
+    controlPlanePauseDeferred = false;
+    LOG_I("MINIS", "Control-plane TLS retry deferred because an SSH channel is active");
+    return false;
+  }
+
   if (!controlPlanePauseConfirmed) {
     controlPlanePauseRequested = false;
     LOG_W("MINIS", "SSH pause request timed out; control-plane retry deferred");
@@ -723,6 +734,10 @@ bool tunnelPauseRequestedForControlPlane() {
 
 void confirmTunnelPausedForControlPlane() {
   controlPlanePauseConfirmed = true;
+}
+
+void deferTunnelPauseForControlPlane() {
+  controlPlanePauseDeferred = true;
 }
 
 bool takeTunnelResumeRequest() {
