@@ -150,13 +150,20 @@ void loop() {
   }
 
   if (minis_registration::tunnelPauseRequestedForControlPlane()) {
-    if (tunnel.getState() != TUNNEL_DISCONNECTED) {
-      LOG_W("MINIS", "Pausing SSH tunnel temporarily to free heap for control-plane TLS");
-      tunnel.disconnect();
+    if (tunnel.getActiveChannels() > 0) {
+      // A control-plane heartbeat is lower priority than an active user's
+      // forwarded session. Tell the Minis task to defer this maintenance
+      // cycle and keep pumping the tunnel without interruption.
+      minis_registration::deferTunnelPauseForControlPlane();
+    } else {
+      if (tunnel.getState() != TUNNEL_DISCONNECTED) {
+        LOG_W("MINIS", "Pausing idle SSH tunnel temporarily to free heap for control-plane TLS");
+        tunnel.disconnect();
+      }
+      minis_registration::confirmTunnelPausedForControlPlane();
+      vTaskDelay(pdMS_TO_TICKS(20));
+      return;
     }
-    minis_registration::confirmTunnelPausedForControlPlane();
-    vTaskDelay(pdMS_TO_TICKS(20));
-    return;
   }
 
   ensureMinisControlPlane();
@@ -418,9 +425,6 @@ void applyPendingMinisConfig() {
   globalSSHConfig.setTunnelConfig(next.remoteBindHost, next.remoteBindPort,
       next.localHost, next.localPort);
 
-  // A valid Minis configuration is the desired state. Persist it before
-  // treating transport availability as success/failure; a transient SSH auth,
-  // listener, or network failure must not roll the desired state back.
   if (!wifi_provisioning::saveManagedConfig(next)) {
     LOG_E("MINIS", "Unable to store managed tunnel config; rolling back stored and runtime configuration");
     tunnel.disconnect();
@@ -454,8 +458,6 @@ void applyPendingMinisConfig() {
     return;
   }
 
-  // connectSSH() leaves the tunnel in TUNNEL_ERROR. Keep the newly stored
-  // config and let the tunnel's normal exponential-backoff logic retry it.
   status_led::set(status_led::State::Error);
   LOG_W("MINIS", "Managed tunnel config stored, but initial SSH activation failed; keeping new config and retrying via tunnel state machine");
 }
