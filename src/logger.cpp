@@ -1,13 +1,32 @@
 #include "logger.h"
 #include "ssh_config.h"
+#include <WiFi.h>
 #include <stdarg.h>
 #include <string.h>
 #include <time.h>
 
 namespace {
-// "[YYYY-MM-DD HH:MM:SS] " when system time is valid (NTP synced or restored
-// from RTC by the host firmware), otherwise "[up+12345ms] ".
+constexpr const char *LOCAL_TIMEZONE = "CET-1CEST,M3.5.0,M10.5.0/3";
+constexpr const char *NTP_SERVER_PRIMARY = "pool.ntp.org";
+constexpr const char *NTP_SERVER_SECONDARY = "time.cloudflare.com";
+
+// Start SNTP once networking is available. configTzTime() is asynchronous, so
+// logging never waits for a time server; the prefix switches automatically as
+// soon as the ESP32 system clock has been synchronized.
+void ensureTimeSyncConfigured() {
+  static bool configured = false;
+  if (configured || WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
+  configTzTime(LOCAL_TIMEZONE, NTP_SERVER_PRIMARY, NTP_SERVER_SECONDARY);
+  configured = true;
+}
+
+// "[YYMMDDhhmmss] " when system time is valid, otherwise "[up+12345ms] ".
 size_t buildLogPrefix(char *out, size_t n) {
+  ensureTimeSyncConfigured();
+
   time_t now = time(nullptr);
   if (now >= 1700000000) { // ~2023-11 sanity: time has been set
     struct tm tm {};
@@ -16,7 +35,7 @@ size_t buildLogPrefix(char *out, size_t n) {
     if (n > 0) {
       out[off++] = '[';
     }
-    size_t w = strftime(out + off, n - off, "%Y-%m-%d %H:%M:%S", &tm);
+    size_t w = strftime(out + off, n - off, "%y%m%d%H%M%S", &tm);
     if (w == 0) {
       return (size_t)snprintf(out, n, "[up+%lums] ",
                               static_cast<unsigned long>(millis()));
