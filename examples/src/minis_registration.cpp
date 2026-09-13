@@ -3,7 +3,6 @@
 #include "ESP-Reverse_Tunneling_Libssh2.h"
 #include <LittleFS.h>
 #include <WiFi.h>
-#include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <esp_heap_caps.h>
 #include <esp_random.h>
@@ -17,13 +16,12 @@ namespace minis_registration {
 namespace {
 
 constexpr const char *MINIS_HOST = "cloud.supcom.nl";
-constexpr uint16_t MINIS_HTTP_PORT = 80;
 constexpr uint16_t MINIS_HTTPS_PORT = 443;
 constexpr const char *MINIS_PATH = "/hb/";
-constexpr const char *MINIS_HTTPS_BASE_URL = "https://cloud.supcom.nl/hb/";
-constexpr const char *MINIS_HTTP_BASE_URL = "http://cloud.supcom.nl/hb/";
+constexpr const char *MINIS_BASE_URL = "https://cloud.supcom.nl/hb/";
 constexpr const char *MINIS_USER_AGENT = "MHB;vESP32";
 constexpr uint32_t MINIS_TIMEOUT_MS = 5000;
+constexpr uint32_t HEARTBEAT_TLS_KEEPALIVE_MS = 45000;
 constexpr uint16_t ONBOARDING_HEARTBEAT_INTERVAL_MIN = 2;
 constexpr uint16_t MIN_HEARTBEAT_INTERVAL_MIN = 2;
 constexpr uint16_t MAX_HEARTBEAT_INTERVAL_MIN = 1440;
@@ -39,6 +37,8 @@ constexpr const char *CACHED_CONFIG_BACKUP_PATH = "/minis.cfg.bak";
 
 TaskHandle_t heartbeatTaskHandle = nullptr;
 QueueHandle_t managedConfigQueue = nullptr;
+WiFiClientSecure heartbeatClient;
+bool heartbeatTlsReady = false;
 uint16_t heartbeatIntervalMin = ONBOARDING_HEARTBEAT_INTERVAL_MIN;
 bool candidateTunnelKnown = false;
 uint16_t candidateHeartbeatIntervalMin = ONBOARDING_HEARTBEAT_INTERVAL_MIN;
@@ -275,26 +275,85 @@ int performGet(const char *suffix, char *response, size_t responseCapacity,
   return status;
 }
 
-int performHeartbeatGet() {
-  WiFiClient client;
-  client.setTimeout(MINIS_TIMEOUT_MS);
-  if (!client.connect(MINIS_HOST, MINIS_HTTP_PORT, MINIS_TIMEOUT_MS)) {
+bool connectHeartbeatTls() {
+  if (heartbeatTlsReady && heartbeatClient.connected()) {
+    return true;
+  }
+
+  heartbeatClient.stop();
+  heartbeatTlsReady = false;
+  lastTlsMemoryPressure = false;
+
+  const size_t largestBefore =
+      heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  if (largestBefore < MINIS_TLS_MIN_LARGEST_BLOCK) {
+    lastTlsMemoryPressure = true;
+    LOGF_W("MINIS",
+           "Heartbeat TLS reconnect deferred: largest heap block %u is below %u bytes; SSH left untouched",
+           static_cast<unsigned int>(largestBefore),
+           static_cast<unsigned int>(MINIS_TLS_MIN_LARGEST_BLOCK));
+    return false;
+  }
+
+  logTlsHeap("heartbeat-before");
+  heartbeatClient.setInsecure();
+  heartbeatClient.setTimeout(MINIS_TIMEOUT_MS);
+  if (!heartbeatClient.connect(MINIS_HOST, MINIS_HTTPS_PORT,
+                               MINIS_TIMEOUT_MS)) {
+    const size_t largestAfter =
+        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    lastTlsMemoryPressure = largestAfter < MINIS_TLS_MIN_LARGEST_BLOCK;
+    logTlsHeap("heartbeat-connect-failed");
+    return false;
+  }
+
+  heartbeatTlsReady = true;
+  logTlsHeap("heartbeat-connected");
+  return true;
+}
+
+int performHeartbeatHead(const char *suffix) {
+  if (!connectHeartbeatTls()) {
+    return lastTlsMemoryPressure ? -2 : -1;
+  }
+
+  heartbeatClient.print(F("HEAD "));
+  heartbeatClient.print(MINIS_PATH);
+  heartbeatClient.print(sid());
+  heartbeatClient.print(suffix);
+  heartbeatClient.print(F(" HTTP/1.1\r\nHost: "));
+  heartbeatClient.print(MINIS_HOST);
+  heartbeatClient.print(F("\r\nUser-Agent: "));
+  heartbeatClient.print(MINIS_USER_AGENT);
+  heartbeatClient.print(F("\r\nConnection: keep-alive\r\n\r\n"));
+
+  char line[128] = {0};
+  const size_t statusLength =
+      heartbeatClient.readBytesUntil('\n', line, sizeof(line) - 1);
+  const int status = parseHttpStatus(line, statusLength);
+  if (status < 0) {
+    heartbeatClient.stop();
+    heartbeatTlsReady = false;
     return -1;
   }
 
-  client.print(F("GET "));
-  client.print(MINIS_PATH);
-  client.print(sid());
-  client.print(F("/ping HTTP/1.1\r\nHost: "));
-  client.print(MINIS_HOST);
-  client.print(F("\r\nUser-Agent: "));
-  client.print(MINIS_USER_AGENT);
-  client.print(F("\r\nConnection: close\r\n\r\n"));
+  while (true) {
+    memset(line, 0, sizeof(line));
+    const size_t length =
+        heartbeatClient.readBytesUntil('\n', line, sizeof(line) - 1);
+    if (length == 0) {
+      heartbeatClient.stop();
+      heartbeatTlsReady = false;
+      return -1;
+    }
+    if (length == 1 && line[0] == '\r') {
+      break;
+    }
+  }
 
-  char line[96] = {0};
-  const size_t statusLength = client.readBytesUntil('\n', line, sizeof(line) - 1);
-  const int status = parseHttpStatus(line, statusLength);
-  client.stop();
+  if (!heartbeatClient.connected()) {
+    heartbeatTlsReady = false;
+  }
   return status;
 }
 
@@ -305,13 +364,13 @@ bool sendHeartbeat(bool bootstrap) {
   }
 
   const String clientSid = sid();
-  const String url = String(bootstrap ? MINIS_HTTPS_BASE_URL : MINIS_HTTP_BASE_URL) +
-                     clientSid + (bootstrap ? "/" : "/ping");
-  LOGF_I("MINIS", "%s GET: %s", bootstrap ? "Bootstrap" : "Heartbeat",
-         url.c_str());
+  const String url = String(MINIS_BASE_URL) + clientSid +
+                     (bootstrap ? "/" : "/ping");
+  LOGF_I("MINIS", "%s %s: %s", bootstrap ? "Bootstrap" : "Heartbeat",
+         bootstrap ? "GET" : "HEAD", url.c_str());
 
   const int status = bootstrap ? performGet("/", nullptr, 0, nullptr)
-                               : performHeartbeatGet();
+                               : performHeartbeatHead("/ping");
   const bool ok = bootstrap ? status > 0
                             : (status == 200 || status == 204 || status == 404);
   if (ok) {
@@ -699,9 +758,25 @@ void heartbeatTask(void *) {
   vTaskDelay(pdMS_TO_TICKS(INITIAL_CONFIG_DELAY_MS));
   refreshConfigWithMemoryRecovery();
   while (true) {
-    const uint32_t delaySeconds = nextHeartbeatDelaySeconds();
-    LOGF_I("MINIS", "Next heartbeat in %lu min %lu sec", static_cast<unsigned long>(delaySeconds / 60U), static_cast<unsigned long>(delaySeconds % 60U));
-    vTaskDelay(pdMS_TO_TICKS(static_cast<uint64_t>(delaySeconds) * 1000ULL));
+    uint32_t remainingMs = nextHeartbeatDelaySeconds() * 1000U;
+    LOGF_I("MINIS", "Next heartbeat in %lu min %lu sec",
+           static_cast<unsigned long>(remainingMs / 60000U),
+           static_cast<unsigned long>((remainingMs / 1000U) % 60U));
+
+    while (remainingMs > HEARTBEAT_TLS_KEEPALIVE_MS) {
+      vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_TLS_KEEPALIVE_MS));
+      remainingMs -= HEARTBEAT_TLS_KEEPALIVE_MS;
+      const int status = performHeartbeatHead("/keepalive");
+      if (status < 0) {
+        LOGF_W("MINIS",
+               "Persistent heartbeat TLS keepalive failed: %d; SSH left untouched",
+               status);
+      }
+    }
+
+    if (remainingMs > 0) {
+      vTaskDelay(pdMS_TO_TICKS(remainingMs));
+    }
     sendHeartbeat(false);
   }
 }
@@ -720,7 +795,22 @@ bool registerClient() {
   }
   const String clientSid = sid();
   LOGF_I("MINIS", "SID: %s", clientSid.c_str());
-  return sendHeartbeat(true);
+
+  const bool bootstrapOk = sendHeartbeat(true);
+  if (!connectHeartbeatTls()) {
+    LOG_W("MINIS", "Persistent heartbeat TLS session could not be prepared");
+    return bootstrapOk;
+  }
+
+  const int keepaliveStatus = performHeartbeatHead("/keepalive");
+  if (keepaliveStatus > 0) {
+    LOGF_I("MINIS", "Persistent heartbeat TLS session ready (HTTP %d)",
+           keepaliveStatus);
+  } else {
+    LOGF_W("MINIS", "Persistent heartbeat TLS probe failed: %d",
+           keepaliveStatus);
+  }
+  return bootstrapOk;
 }
 
 bool startHeartbeatTask() {
