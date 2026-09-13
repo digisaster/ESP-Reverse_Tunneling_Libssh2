@@ -34,10 +34,11 @@ bool takeManagedTunnelConfig(ManagedTunnelConfig &config);
 // TLS on the C3 can temporarily run out of contiguous heap while libssh2 is
 // active. The Minis background task never manipulates the SSH tunnel directly;
 // instead it requests a short maintenance window from the main task. The main
-// task disconnects the tunnel, confirms the pause, and later consumes the
-// resume request so normal tunnel reconnection remains single-threaded.
+// task may confirm the pause when the tunnel is idle, or defer the request when
+// an active forwarded channel must not be interrupted.
 bool tunnelPauseRequestedForControlPlane();
 void confirmTunnelPausedForControlPlane();
+void deferTunnelPauseForControlPlane();
 bool takeTunnelResumeRequest();
 
 } // namespace minis_registration
