@@ -54,7 +54,6 @@ String encodeFingerprintBase64(const unsigned char *data, size_t len) {
     out += have_c ? kBase64Table[triple & 0x3F] : '=';
   }
 
-  // Strip trailing '=' (OpenSSH format)
   while (out.length() > 0 && out.charAt(out.length() - 1) == '=') {
     out.remove(out.length() - 1);
   }
@@ -74,11 +73,8 @@ static bool isValidHexFingerprint(const String &value) {
   return true;
 }
 
-// Diagnostic-only stable identifier for a public-key string. This is not an
-// OpenSSH fingerprint and is deliberately not used for trust decisions; it
-// only lets logs prove that consecutive reconnects used identical key data.
 static String publicKeyDiagnosticTag(const String &key) {
-  uint64_t hash = 1469598103934665603ULL; // FNV-1a 64-bit offset basis
+  uint64_t hash = 1469598103934665603ULL;
   for (size_t i = 0; i < key.length(); ++i) {
     hash ^= static_cast<uint8_t>(key.charAt(i));
     hash *= 1099511628211ULL;
@@ -92,10 +88,6 @@ static String publicKeyDiagnosticTag(const String &key) {
 
 static unsigned long gLastCleanupCompletedMs = 0;
 static constexpr int kAcceptFatalReconnectThreshold = 3;
-
-// ---------------------------------------------------------------------------
-// SSHSession - Facade
-// ---------------------------------------------------------------------------
 
 SSHSession::SSHSession() {}
 
@@ -139,6 +131,10 @@ bool SSHSession::connect(SSHConfiguration *config) {
   if (session_) {
     LOG_W("SSH", "connect: leftover session, cleaning up");
     cleanupSession();
+    if (session_) {
+      LOG_W("SSH", "connect deferred: previous libssh2 session cleanup is incomplete");
+      return false;
+    }
   }
 
   const SSHServerConfig &sshConfig = config_->getSSHConfig();
@@ -164,7 +160,6 @@ bool SSHSession::connect(SSHConfiguration *config) {
     return false;
   }
   if (!configureKeepalive(connConfig)) {
-    // Non-fatal, just log
   }
   if (!createListeners(config_)) {
     LOG_E("SSH", "CONNECT_STAGE=LISTENER_FAILED_AFTER_AUTH");
@@ -172,8 +167,6 @@ bool SSHSession::connect(SSHConfiguration *config) {
     return false;
   }
 
-  // Switch to non-blocking mode NOW (after all blocking setup is done).
-  // TransportPump needs non-blocking for channel_read/write.
   libssh2_session_set_blocking(session_, 0);
 
   sessionConnectedMs_ = millis();
@@ -220,13 +213,12 @@ bool SSHSession::sendKeepalive() {
   if (lock(pdMS_TO_TICKS(200))) {
     errno = 0;
     rc = libssh2_keepalive_send(session_, &seconds);
-    // Capture errno BEFORE unlock (mutex syscall could clobber it).
     sysErrno = errno;
     if (rc != 0 && rc != LIBSSH2_ERROR_EAGAIN) {
       char *errmsg = nullptr;
       int errmsgLen = 0;
       libssh2Errno = libssh2_session_last_error(session_, &errmsg, &errmsgLen,
-                                                /*want_buf=*/0);
+                                                0);
       if (errmsg && errmsgLen > 0) {
         size_t n = static_cast<size_t>(errmsgLen) < sizeof(libssh2Msg) - 1
                        ? static_cast<size_t>(errmsgLen)
@@ -241,7 +233,7 @@ bool SSHSession::sendKeepalive() {
            "Keep-alive skipped (session lock timeout) since_ok=%lums "
            "since_conn=%lums",
            sinceOk, sinceConn);
-    return true; // Not fatal
+    return true;
   }
 
   if (rc == 0) {
@@ -254,8 +246,6 @@ bool SSHSession::sendKeepalive() {
     return true;
   }
 
-  // Snapshot socket-level state AFTER the failed send (errno from send()
-  // may have been clobbered already; SO_ERROR/getsockopt re-reads pending).
   int soError = 0;
   int soGetRc = -1;
   if (socketfd_ >= 0) {
@@ -275,7 +265,7 @@ bool SSHSession::sendKeepalive() {
     if (keepAliveFailures_ >= 3) {
       LOG_W("SSH", "Keep-alive socket send failed 3 times");
       keepAliveFailures_ = 0;
-      return false; // Signal dead connection
+      return false;
     }
     return true;
   }
@@ -375,15 +365,11 @@ LIBSSH2_CHANNEL *SSHSession::acceptChannel(TunnelConfig &outMapping) {
     }
     LIBSSH2_CHANNEL *ch = libssh2_channel_forward_accept(entry.listener);
     int acceptErr = ch ? 0 : libssh2_session_last_errno(session_);
-    // Capture libssh2 error message UNDER the lock so we can decode what
-    // libssh2 actually thinks is going wrong when CHANNEL_UNKNOWN floods
-    // (the 4468 err=-23/45s pattern observed in production logs).
     char libssh2ErrMsg[160] = {0};
     if (acceptErr == LIBSSH2_ERROR_CHANNEL_UNKNOWN) {
       char *errmsg = nullptr;
       int errmsgLen = 0;
-      libssh2_session_last_error(session_, &errmsg, &errmsgLen,
-                                 /*want_buf=*/0);
+      libssh2_session_last_error(session_, &errmsg, &errmsgLen, 0);
       if (errmsg && errmsgLen > 0) {
         size_t n = static_cast<size_t>(errmsgLen) < sizeof(libssh2ErrMsg) - 1
                        ? static_cast<size_t>(errmsgLen)
@@ -417,9 +403,6 @@ LIBSSH2_CHANNEL *SSHSession::acceptChannel(TunnelConfig &outMapping) {
       return ch;
     }
     recordAcceptNoChannel(acceptErr);
-    // Throttled CHANNEL_UNKNOWN diagnostic. Flood logging would saturate
-    // serial; we print at most once per 1000ms with the cumulative count and
-    // libssh2's textual error so we can decode the actual cause.
     if (acceptErr == LIBSSH2_ERROR_CHANNEL_UNKNOWN) {
       ++channelUnknownTotal_;
       unsigned long nowChu = millis();
@@ -494,10 +477,6 @@ void SSHSession::unlock() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Private: connection steps
-// ---------------------------------------------------------------------------
-
 bool SSHSession::tcpConnect(const SSHServerConfig &sshConfig) {
   socketfd_ = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (socketfd_ == -1) {
@@ -536,15 +515,11 @@ bool SSHSession::tcpConnect(const SSHServerConfig &sshConfig) {
 }
 
 #ifdef TUNNEL_LIBSSH2_TRACE
-static void libssh2TraceToLogger(LIBSSH2_SESSION * /*session*/,
-                                 void * /*context*/, const char *data,
+static void libssh2TraceToLogger(LIBSSH2_SESSION *, void *, const char *data,
                                  size_t length) {
   if (!data || length == 0) {
     return;
   }
-  // libssh2 trace strings aren't NUL-terminated and may contain a trailing
-  // newline; copy into a small static buffer (single-threaded under session
-  // lock) and trim before forwarding.
   static char buf[256];
   size_t n = length < sizeof(buf) - 1 ? length : sizeof(buf) - 1;
   memcpy(buf, data, n);
@@ -564,19 +539,9 @@ bool SSHSession::handshake() {
   }
 
 #ifdef TUNNEL_LIBSSH2_TRACE
-  // Wire libssh2 internal trace to the logger so we can see CHANNEL_OPEN
-  // routing and listener queueing. Requires the libssh2 library itself to
-  // be compiled with -DLIBSSH2DEBUG (otherwise libssh2_trace*() are no-ops).
-  // CONN gives us the events relevant to forward-accept diagnosis:
-  // "Remote received connection from..." and "Connection queued: ...".
-  // Add LIBSSH2_TRACE_TRANS if you also need per-packet visibility (very
-  // chatty — thousands of lines/sec on a busy session).
   libssh2_trace_sethandler(session_, this, libssh2TraceToLogger);
   libssh2_trace(session_, LIBSSH2_TRACE_CONN);
 #endif
-
-  // Session stays BLOCKING during setup (handshake, auth, listeners).
-  // Non-blocking mode is enabled after connect() completes successfully.
 
   if (!lock(pdMS_TO_TICKS(5000))) {
     LOG_E("SSH", "Session lock timeout during handshake");
@@ -650,27 +615,13 @@ bool SSHSession::verifyHostKey(const SSHServerConfig &sshConfig) {
 
   String keyTypeStr;
   switch (host_key_type) {
-  case LIBSSH2_HOSTKEY_TYPE_RSA:
-    keyTypeStr = "ssh-rsa";
-    break;
-  case LIBSSH2_HOSTKEY_TYPE_DSS:
-    keyTypeStr = "ssh-dss";
-    break;
-  case LIBSSH2_HOSTKEY_TYPE_ECDSA_256:
-    keyTypeStr = "ecdsa-sha2-nistp256";
-    break;
-  case LIBSSH2_HOSTKEY_TYPE_ECDSA_384:
-    keyTypeStr = "ecdsa-sha2-nistp384";
-    break;
-  case LIBSSH2_HOSTKEY_TYPE_ECDSA_521:
-    keyTypeStr = "ecdsa-sha2-nistp521";
-    break;
-  case LIBSSH2_HOSTKEY_TYPE_ED25519:
-    keyTypeStr = "ssh-ed25519";
-    break;
-  default:
-    keyTypeStr = "unknown";
-    break;
+  case LIBSSH2_HOSTKEY_TYPE_RSA: keyTypeStr = "ssh-rsa"; break;
+  case LIBSSH2_HOSTKEY_TYPE_DSS: keyTypeStr = "ssh-dss"; break;
+  case LIBSSH2_HOSTKEY_TYPE_ECDSA_256: keyTypeStr = "ecdsa-sha2-nistp256"; break;
+  case LIBSSH2_HOSTKEY_TYPE_ECDSA_384: keyTypeStr = "ecdsa-sha2-nistp384"; break;
+  case LIBSSH2_HOSTKEY_TYPE_ECDSA_521: keyTypeStr = "ecdsa-sha2-nistp521"; break;
+  case LIBSSH2_HOSTKEY_TYPE_ED25519: keyTypeStr = "ssh-ed25519"; break;
+  default: keyTypeStr = "unknown"; break;
   }
 
   LOGF_I("SSH", "Server host key: %s", keyTypeStr.c_str());
@@ -798,7 +749,6 @@ bool SSHSession::authenticate(const SSHServerConfig &sshConfig) {
   }
   LOGF_I("SSH", "Authentication methods: %s", userauthlist);
 
-  // Determine auth method
   bool usePassword = !sshConfig.useSSHKey;
 
   if (usePassword) {
@@ -819,7 +769,6 @@ bool SSHSession::authenticate(const SSHServerConfig &sshConfig) {
     return true;
   }
 
-  // Public key authentication
   if (config_) {
     config_->diagnoseSSHKeys();
   }
@@ -877,19 +826,15 @@ bool SSHSession::authenticate(const SSHServerConfig &sshConfig) {
            keyTag.c_str(), session_, socketfd_);
     if (sshConfig.publicKeyData.isEmpty()) {
       LOG_W("SSH",
-            "If this is a non-RSA key, supply its matching OpenSSH "
-            "public-key line");
+            "If this is a non-RSA key, supply its matching OpenSSH public-key line");
     } else {
       LOG_W("SSH",
-            "Public-key authentication failed; verify the username, "
-            "authorized_keys entry, and matching key pair");
+            "Public-key authentication failed; verify the username, authorized_keys entry, and matching key pair");
     }
     return false;
 
   } else {
-    // Fallback to file-based method
-    LOG_W("SSH",
-          "SSH keys not available in memory, falling back to file-based auth");
+    LOG_W("SSH", "SSH keys not available in memory, falling back to file-based auth");
     String keyfile1_str = sshConfig.privateKeyPath + ".pub";
     const char *keyfile1 = keyfile1_str.c_str();
     const char *keyfile2 = sshConfig.privateKeyPath.c_str();
@@ -963,10 +908,6 @@ bool SSHSession::createListeners(SSHConfiguration *config) {
   return !listeners_.empty();
 }
 
-// ---------------------------------------------------------------------------
-// Private: listener helpers
-// ---------------------------------------------------------------------------
-
 bool SSHSession::createListenerForMapping(const TunnelConfig &mapping,
                                           ListenerEntry &entry) {
   const int maxlisten =
@@ -1018,8 +959,7 @@ bool SSHSession::createListenerForMapping(const TunnelConfig &mapping,
   entry.boundPort = boundPortResult;
   if (boundPortResult != bindPort && bindPort != 0) {
     LOGF_W("SSH",
-           "Listener bound on port %d but %d was requested — sshd may have "
-           "fallen back to a random port",
+           "Listener bound on port %d but %d was requested — sshd may have fallen back to a random port",
            boundPortResult, bindPort);
   }
   LOGF_I("SSH", "Reverse listener ready %s:%d (bound %d) -> %s:%d",
@@ -1070,16 +1010,14 @@ bool SSHSession::relistenStuckListeners(unsigned long nowMs,
     }
     TunnelConfig mapping = entry.mapping;
     LOGF_W("SSH",
-           "SERVERDIAG forward_listener_stuck_relisten remote=%s:%d "
-           "idle_ms=%lu total_accepts=%lu threshold_ms=%lu",
+           "SERVERDIAG forward_listener_stuck_relisten remote=%s:%d idle_ms=%lu total_accepts=%lu threshold_ms=%lu",
            mapping.remoteBindHost.c_str(), mapping.remoteBindPort, idleMs,
            totalAccepts_, thresholdMs);
     cancelListener(entry);
     if (createListenerForMapping(mapping, entry)) {
       anyRecreated = true;
     } else {
-      LOGF_E("SSH",
-             "Failed to recreate stuck listener for %s:%d — slot left empty",
+      LOGF_E("SSH", "Failed to recreate stuck listener for %s:%d — slot left empty",
              mapping.remoteBindHost.c_str(), mapping.remoteBindPort);
     }
   }
@@ -1092,10 +1030,6 @@ bool SSHSession::relistenStuckListeners(unsigned long nowMs,
   return anyRecreated;
 }
 
-// ---------------------------------------------------------------------------
-// Private: cleanup
-// ---------------------------------------------------------------------------
-
 void SSHSession::cleanupSession() {
   const unsigned long cleanupStartedMs = millis();
   const size_t listenersBefore = listeners_.size();
@@ -1106,24 +1040,52 @@ void SSHSession::cleanupSession() {
 
   int disconnectRc = 0;
   int freeRc = 0;
+  int closeRc = 0;
   bool forcedWithoutLock = false;
+  bool socketClosedForCleanup = false;
+  const int fdBeforeClose = socketfd_;
+
   if (session_) {
-    if (lock(pdMS_TO_TICKS(2000))) {
-      disconnectRc = libssh2_session_disconnect(session_, "Shutdown");
-      freeRc = libssh2_session_free(session_);
-      unlock();
-    } else {
+    bool locked = lock(pdMS_TO_TICKS(2000));
+    if (!locked) {
       forcedWithoutLock = true;
-      LOG_W("SSH", "Session lock timeout during cleanup, forcing free");
-      disconnectRc = libssh2_session_disconnect(session_, "Shutdown");
-      freeRc = libssh2_session_free(session_);
+      LOG_W("SSH", "Session lock timeout during cleanup; continuing teardown without lock");
     }
-    session_ = nullptr;
+
+    disconnectRc = libssh2_session_disconnect(session_, "Shutdown");
+
+    freeRc = libssh2_session_free(session_);
+    if (freeRc == LIBSSH2_ERROR_EAGAIN && socketfd_ >= 0) {
+      LOG_W("SSH", "libssh2 session free returned EAGAIN; closing transport and retrying cleanup");
+      shutdown(socketfd_, SHUT_RDWR);
+      closeRc = close(socketfd_);
+      socketfd_ = -1;
+      socketClosedForCleanup = true;
+
+      for (int attempt = 0;
+           attempt < 8 && freeRc == LIBSSH2_ERROR_EAGAIN; ++attempt) {
+        vTaskDelay(pdMS_TO_TICKS(1));
+        freeRc = libssh2_session_free(session_);
+      }
+    }
+
+    if (freeRc == 0) {
+      session_ = nullptr;
+    } else {
+      LOGF_W("SSH",
+             "libssh2 session cleanup incomplete: free_rc=%d; preserving session pointer for a later cleanup attempt",
+             freeRc);
+    }
+
+    if (locked) {
+      unlock();
+    }
   }
 
-  int closeRc = 0;
-  const int fdBeforeClose = socketfd_;
   if (socketfd_ >= 0) {
+    if (!socketClosedForCleanup) {
+      shutdown(socketfd_, SHUT_RDWR);
+    }
     closeRc = close(socketfd_);
     socketfd_ = -1;
   }
@@ -1138,9 +1100,8 @@ void SSHSession::cleanupSession() {
 
   gLastCleanupCompletedMs = millis();
   LOGF_I("SSH",
-         "SESSION_CLEANUP=END old_fd=%d disconnect_rc=%d free_rc=%d "
-         "close_rc=%d forced=%s duration=%lums",
+         "SESSION_CLEANUP=END old_fd=%d disconnect_rc=%d free_rc=%d close_rc=%d forced=%s session_remaining=%s duration=%lums",
          fdBeforeClose, disconnectRc, freeRc, closeRc,
-         forcedWithoutLock ? "yes" : "no",
+         forcedWithoutLock ? "yes" : "no", session_ ? "yes" : "no",
          gLastCleanupCompletedMs - cleanupStartedMs);
 }
