@@ -45,6 +45,10 @@ bool writeFile(const char *path, const String &value) {
 }
 
 bool loadExisting(String &privateKey, String &publicKey) {
+  if (!LittleFS.exists(KEY_PATH) || !LittleFS.exists(PUBLIC_KEY_PATH)) {
+    return false;
+  }
+
   File privateFile = LittleFS.open(KEY_PATH, "r");
   File publicFile = LittleFS.open(PUBLIC_KEY_PATH, "r");
   if (!privateFile || !publicFile || privateFile.size() == 0 ||
