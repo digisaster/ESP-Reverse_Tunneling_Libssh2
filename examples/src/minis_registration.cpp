@@ -255,70 +255,21 @@ int performGet(const char *suffix, char *response, size_t responseCapacity,
   return status;
 }
 
-int performHeartbeatHead() {
-  if (!tlsMemoryAvailable("Heartbeat"))
-    return -2;
-
-  logTlsHeap("heartbeat-before");
-  WiFiClientSecure client;
-  client.setInsecure();
-  client.setTimeout(MINIS_TIMEOUT_MS);
-  if (!client.connect(MINIS_HOST, MINIS_HTTPS_PORT, MINIS_TIMEOUT_MS)) {
-    logTlsHeap("heartbeat-connect-failed");
-    client.stop();
-    return -1;
-  }
-
-  logTlsHeap("heartbeat-connected");
-  client.print(F("HEAD "));
-  client.print(MINIS_PATH);
-  client.print(sid());
-  client.print(F("/ping HTTP/1.1\r\nHost: "));
-  client.print(MINIS_HOST);
-  client.print(F("\r\nUser-Agent: "));
-  client.print(MINIS_USER_AGENT);
-  client.print(F("\r\nConnection: close\r\n\r\n"));
-
-  char line[128] = {0};
-  const size_t statusLength =
-      client.readBytesUntil('\n', line, sizeof(line) - 1);
-  const int status = parseHttpStatus(line, statusLength);
-  if (status >= 0) {
-    while (true) {
-      memset(line, 0, sizeof(line));
-      const size_t length = client.readBytesUntil('\n', line, sizeof(line) - 1);
-      if (length == 0 || (length == 1 && line[0] == '\r'))
-        break;
-    }
-  }
-  client.stop();
-  return status;
-}
-
-bool sendHeartbeat(bool bootstrap) {
+bool sendBootstrap() {
   if (WiFi.status() != WL_CONNECTED) {
-    LOG_W("MINIS", "Heartbeat skipped: WiFi not connected");
+    LOG_W("MINIS", "Registration skipped: WiFi not connected");
     return false;
   }
 
-  const String clientSid = sid();
-  const String url = String(MINIS_BASE_URL) + clientSid +
-                     (bootstrap ? "/" : "/ping");
-  LOGF_I("MINIS", "%s %s: %s", bootstrap ? "Bootstrap" : "Heartbeat",
-         bootstrap ? "GET" : "HEAD", url.c_str());
-
-  const int status = bootstrap ? performGet("/", nullptr, 0, nullptr)
-                               : performHeartbeatHead();
-  const bool ok = bootstrap ? status > 0
-                            : (status == 200 || status == 204 || status == 404);
-  if (ok) {
-    LOGF_I("MINIS", "%s HTTP status: %d",
-           bootstrap ? "Bootstrap" : "Heartbeat", status);
+  const String url = String(MINIS_BASE_URL) + sid() + "/";
+  LOGF_I("MINIS", "Bootstrap GET: %s", url.c_str());
+  const int status = performGet("/", nullptr, 0, nullptr);
+  if (status > 0) {
+    LOGF_I("MINIS", "Bootstrap HTTP status: %d", status);
     return true;
   }
 
-  LOGF_W("MINIS", "%s request failed: %d",
-         bootstrap ? "Bootstrap" : "Heartbeat", status);
+  LOGF_W("MINIS", "Bootstrap request failed: %d", status);
   return false;
 }
 
@@ -610,17 +561,20 @@ bool queueManagedConfig(const ParsedConfig &parsed) {
 
 bool refreshConfig() {
   if (WiFi.status() != WL_CONNECTED) {
-    LOG_W("MINIS", "Config check skipped: WiFi not connected");
+    LOG_W("MINIS", "Heartbeat/config check skipped: WiFi not connected");
     return false;
   }
+
+  const String url = String(MINIS_BASE_URL) + sid() + "/cfg.txt";
+  LOGF_I("MINIS", "Heartbeat/config GET: %s", url.c_str());
 
   char config[CONFIG_BUFFER_SIZE] = {0};
   size_t configLength = 0;
   const int status =
       performGet("/cfg.txt", config, sizeof(config), &configLength);
   if (status != 200) {
-    LOGF_I("MINIS", "cfg.txt unavailable (HTTP %d); keeping %u min", status,
-           static_cast<unsigned int>(heartbeatIntervalMin));
+    LOGF_I("MINIS", "Heartbeat/config request unavailable (HTTP %d); keeping %u min",
+           status, static_cast<unsigned int>(heartbeatIntervalMin));
     return false;
   }
 
@@ -669,13 +623,11 @@ void heartbeatTask(void *) {
 
   while (true) {
     const uint32_t delaySeconds = nextHeartbeatDelaySeconds();
-    LOGF_I("MINIS", "Next heartbeat in %lu min %lu sec",
+    LOGF_I("MINIS", "Next heartbeat/config check in %lu min %lu sec",
            static_cast<unsigned long>(delaySeconds / 60U),
            static_cast<unsigned long>(delaySeconds % 60U));
     vTaskDelay(pdMS_TO_TICKS(static_cast<uint64_t>(delaySeconds) * 1000ULL));
-
-    if (sendHeartbeat(false))
-      refreshConfig();
+    refreshConfig();
   }
 }
 
@@ -687,13 +639,8 @@ String sid() {
 }
 
 bool registerClient() {
-  if (WiFi.status() != WL_CONNECTED) {
-    LOG_W("MINIS", "Registration skipped: WiFi not connected");
-    return false;
-  }
-  const String clientSid = sid();
-  LOGF_I("MINIS", "SID: %s", clientSid.c_str());
-  return sendHeartbeat(true);
+  LOGF_I("MINIS", "SID: %s", sid().c_str());
+  return sendBootstrap();
 }
 
 bool startHeartbeatTask() {
