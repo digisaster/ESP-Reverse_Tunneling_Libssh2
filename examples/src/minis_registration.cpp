@@ -29,8 +29,7 @@ constexpr uint32_t HEARTBEAT_TASK_STACK_BYTES = 6144;
 constexpr size_t CONFIG_BUFFER_SIZE = 768;
 constexpr size_t MAX_CONFIG_HOST_LENGTH = 253;
 constexpr size_t MINIS_TLS_MIN_LARGEST_BLOCK = 31 * 1024;
-constexpr size_t MINIS_HEARTBEAT_MIN_FREE_HEAP = 70 * 1024;
-constexpr uint32_t CONTROL_PLANE_PAUSE_TIMEOUT_MS = 5000;
+constexpr size_t MINIS_TLS_MIN_FREE_HEAP = 70 * 1024;
 constexpr const char *CACHED_CONFIG_PATH = "/minis.cfg";
 constexpr const char *CACHED_CONFIG_TEMP_PATH = "/minis.cfg.tmp";
 constexpr const char *CACHED_CONFIG_BACKUP_PATH = "/minis.cfg.bak";
@@ -38,20 +37,6 @@ constexpr const char *CACHED_CONFIG_BACKUP_PATH = "/minis.cfg.bak";
 TaskHandle_t heartbeatTaskHandle = nullptr;
 QueueHandle_t managedConfigQueue = nullptr;
 uint16_t heartbeatIntervalMin = ONBOARDING_HEARTBEAT_INTERVAL_MIN;
-bool candidateTunnelKnown = false;
-uint16_t candidateHeartbeatIntervalMin = ONBOARDING_HEARTBEAT_INTERVAL_MIN;
-bool candidateTunnelEnabled = false;
-String candidateSshHost;
-uint16_t candidateSshPort = 0;
-String candidateRemoteBindHost;
-uint16_t candidateRemoteBindPort = 0;
-String candidateLocalHost;
-uint16_t candidateLocalPort = 0;
-volatile bool controlPlanePauseRequested = false;
-volatile bool controlPlanePauseConfirmed = false;
-volatile bool controlPlanePauseDeferred = false;
-volatile bool controlPlaneResumeRequested = false;
-volatile bool lastTlsMemoryPressure = false;
 
 struct QueuedManagedConfig {
   bool enabled;
@@ -93,9 +78,8 @@ struct ParsedConfig {
 };
 
 void removeIfExists(const char *path) {
-  if (LittleFS.exists(path)) {
+  if (LittleFS.exists(path))
     LittleFS.remove(path);
-  }
 }
 
 void logTlsHeap(const char *stage) {
@@ -106,6 +90,28 @@ void logTlsHeap(const char *stage) {
          static_cast<unsigned int>(freeHeap),
          static_cast<unsigned int>(largestBlock),
          static_cast<unsigned int>(ESP.getMinFreeHeap()));
+}
+
+bool tlsMemoryAvailable(const char *requestName) {
+  const size_t freeHeap = ESP.getFreeHeap();
+  const size_t largestBlock =
+      heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  if (freeHeap < MINIS_TLS_MIN_FREE_HEAP) {
+    LOGF_W("MINIS",
+           "%s TLS deferred: free heap %u is below %u bytes (largest=%u); SSH left untouched",
+           requestName, static_cast<unsigned int>(freeHeap),
+           static_cast<unsigned int>(MINIS_TLS_MIN_FREE_HEAP),
+           static_cast<unsigned int>(largestBlock));
+    return false;
+  }
+  if (largestBlock < MINIS_TLS_MIN_LARGEST_BLOCK) {
+    LOGF_W("MINIS",
+           "%s TLS deferred: largest heap block %u is below %u bytes; SSH left untouched",
+           requestName, static_cast<unsigned int>(largestBlock),
+           static_cast<unsigned int>(MINIS_TLS_MIN_LARGEST_BLOCK));
+    return false;
+  }
+  return true;
 }
 
 String buildSid() {
@@ -126,64 +132,47 @@ int parseHttpStatus(const char *line, size_t length) {
   }
   if (separator == nullptr || separator + 3 >= line + length ||
       separator[1] < '0' || separator[1] > '9' || separator[2] < '0' ||
-      separator[2] > '9' || separator[3] < '0' || separator[3] > '9') {
+      separator[2] > '9' || separator[3] < '0' || separator[3] > '9')
     return -1;
-  }
   return (separator[1] - '0') * 100 + (separator[2] - '0') * 10 +
          (separator[3] - '0');
 }
 
 bool parseUnsigned(const char *text, uint32_t &value) {
-  if (*text < '0' || *text > '9') {
+  if (*text < '0' || *text > '9')
     return false;
-  }
   uint32_t parsed = 0;
   while (*text >= '0' && *text <= '9') {
     const uint32_t digit = static_cast<uint32_t>(*text - '0');
-    if (parsed > (UINT32_MAX - digit) / 10U) {
+    if (parsed > (UINT32_MAX - digit) / 10U)
       return false;
-    }
     parsed = parsed * 10U + digit;
     ++text;
   }
-  while (*text == ' ' || *text == '\t' || *text == '\r') {
+  while (*text == ' ' || *text == '\t' || *text == '\r')
     ++text;
-  }
-  if (*text != '\0' && *text != '\n' && *text != '#') {
+  if (*text != '\0' && *text != '\n' && *text != '#')
     return false;
-  }
   value = parsed;
   return true;
 }
 
 int performGet(const char *suffix, char *response, size_t responseCapacity,
                size_t *responseLength) {
-  if (responseLength != nullptr) {
+  if (responseLength != nullptr)
     *responseLength = 0;
-  }
 
-  lastTlsMemoryPressure = false;
-  logTlsHeap("before");
-  const size_t largestBefore =
-      heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  if (largestBefore < MINIS_TLS_MIN_LARGEST_BLOCK) {
-    lastTlsMemoryPressure = true;
-    LOGF_W("MINIS",
-           "TLS request deferred: largest heap block %u is below %u bytes",
-           static_cast<unsigned int>(largestBefore),
-           static_cast<unsigned int>(MINIS_TLS_MIN_LARGEST_BLOCK));
+  if (!tlsMemoryAvailable("GET"))
     return -2;
-  }
 
+  logTlsHeap("before");
   WiFiClientSecure secureClient;
   secureClient.setInsecure();
   secureClient.setTimeout(MINIS_TIMEOUT_MS);
 
   if (!secureClient.connect(MINIS_HOST, MINIS_HTTPS_PORT, MINIS_TIMEOUT_MS)) {
-    const size_t largestAfter =
-        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    lastTlsMemoryPressure = largestAfter < MINIS_TLS_MIN_LARGEST_BLOCK;
     logTlsHeap("connect-failed");
+    secureClient.stop();
     return -1;
   }
 
@@ -213,20 +202,17 @@ int performGet(const char *suffix, char *response, size_t responseCapacity,
     memset(line, 0, sizeof(line));
     const size_t length =
         secureClient.readBytesUntil('\n', line, sizeof(line) - 1);
-    if (length == 0 || (length == 1 && line[0] == '\r')) {
+    if (length == 0 || (length == 1 && line[0] == '\r'))
       break;
-    }
     constexpr char CONTENT_LENGTH_HEADER[] = "Content-Length:";
     if (strncmp(line, CONTENT_LENGTH_HEADER,
                 sizeof(CONTENT_LENGTH_HEADER) - 1) == 0) {
       const char *value = line + sizeof(CONTENT_LENGTH_HEADER) - 1;
-      while (*value == ' ' || *value == '\t') {
+      while (*value == ' ' || *value == '\t')
         ++value;
-      }
       uint32_t parsedLength = 0;
-      if (parseUnsigned(value, parsedLength) && parsedLength <= INT_MAX) {
+      if (parseUnsigned(value, parsedLength) && parsedLength <= INT_MAX)
         contentLength = static_cast<int>(parsedLength);
-      }
     }
   }
 
@@ -244,15 +230,13 @@ int performGet(const char *suffix, char *response, size_t responseCapacity,
     while (secureClient.connected() || secureClient.available()) {
       while (secureClient.available()) {
         const int value = secureClient.read();
-        if (value < 0) {
+        if (value < 0)
           break;
-        }
         lastDataAt = millis();
-        if (used + 1 < responseCapacity) {
+        if (used + 1 < responseCapacity)
           response[used++] = static_cast<char>(value);
-        } else {
+        else
           complete = false;
-        }
       }
       if (millis() - lastDataAt >= MINIS_TIMEOUT_MS) {
         complete = false;
@@ -263,47 +247,23 @@ int performGet(const char *suffix, char *response, size_t responseCapacity,
   }
 
   secureClient.stop();
-  if (!complete) {
+  if (!complete)
     return -1;
-  }
   response[used] = '\0';
-  if (responseLength != nullptr) {
+  if (responseLength != nullptr)
     *responseLength = used;
-  }
   return status;
 }
 
 int performHeartbeatHead() {
-  lastTlsMemoryPressure = false;
-  const size_t freeBefore = ESP.getFreeHeap();
-  const size_t largestBefore =
-      heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-  if (freeBefore < MINIS_HEARTBEAT_MIN_FREE_HEAP) {
-    lastTlsMemoryPressure = true;
-    LOGF_W("MINIS",
-           "Heartbeat TLS deferred: free heap %u is below %u bytes (largest=%u); SSH left untouched",
-           static_cast<unsigned int>(freeBefore),
-           static_cast<unsigned int>(MINIS_HEARTBEAT_MIN_FREE_HEAP),
-           static_cast<unsigned int>(largestBefore));
+  if (!tlsMemoryAvailable("Heartbeat"))
     return -2;
-  }
-  if (largestBefore < MINIS_TLS_MIN_LARGEST_BLOCK) {
-    lastTlsMemoryPressure = true;
-    LOGF_W("MINIS",
-           "Heartbeat TLS deferred: largest heap block %u is below %u bytes; SSH left untouched",
-           static_cast<unsigned int>(largestBefore),
-           static_cast<unsigned int>(MINIS_TLS_MIN_LARGEST_BLOCK));
-    return -2;
-  }
 
   logTlsHeap("heartbeat-before");
   WiFiClientSecure client;
   client.setInsecure();
   client.setTimeout(MINIS_TIMEOUT_MS);
   if (!client.connect(MINIS_HOST, MINIS_HTTPS_PORT, MINIS_TIMEOUT_MS)) {
-    const size_t largestAfter =
-        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
-    lastTlsMemoryPressure = largestAfter < MINIS_TLS_MIN_LARGEST_BLOCK;
     logTlsHeap("heartbeat-connect-failed");
     client.stop();
     return -1;
@@ -326,11 +286,9 @@ int performHeartbeatHead() {
   if (status >= 0) {
     while (true) {
       memset(line, 0, sizeof(line));
-      const size_t length =
-          client.readBytesUntil('\n', line, sizeof(line) - 1);
-      if (length == 0 || (length == 1 && line[0] == '\r')) {
+      const size_t length = client.readBytesUntil('\n', line, sizeof(line) - 1);
+      if (length == 0 || (length == 1 && line[0] == '\r'))
         break;
-      }
     }
   }
   client.stop();
@@ -366,20 +324,16 @@ bool sendHeartbeat(bool bootstrap) {
 
 SettingResult parseSetting(const char *line, const char *key, uint32_t &value) {
   const size_t keyLength = strlen(key);
-  if (strncmp(line, key, keyLength) != 0) {
+  if (strncmp(line, key, keyLength) != 0)
     return SettingResult::NotFound;
-  }
   const char *settingValue = line + keyLength;
-  while (*settingValue == ' ' || *settingValue == '\t') {
+  while (*settingValue == ' ' || *settingValue == '\t')
     ++settingValue;
-  }
-  if (*settingValue != '=') {
+  if (*settingValue != '=')
     return SettingResult::NotFound;
-  }
   ++settingValue;
-  while (*settingValue == ' ' || *settingValue == '\t') {
+  while (*settingValue == ' ' || *settingValue == '\t')
     ++settingValue;
-  }
   return parseUnsigned(settingValue, value) ? SettingResult::Valid
                                             : SettingResult::Invalid;
 }
@@ -387,29 +341,23 @@ SettingResult parseSetting(const char *line, const char *key, uint32_t &value) {
 SettingResult parseTextSetting(char *line, const char *key,
                                const char *&value) {
   const size_t keyLength = strlen(key);
-  if (strncmp(line, key, keyLength) != 0) {
+  if (strncmp(line, key, keyLength) != 0)
     return SettingResult::NotFound;
-  }
   char *settingValue = line + keyLength;
-  while (*settingValue == ' ' || *settingValue == '\t') {
+  while (*settingValue == ' ' || *settingValue == '\t')
     ++settingValue;
-  }
-  if (*settingValue != '=') {
+  if (*settingValue != '=')
     return SettingResult::NotFound;
-  }
   ++settingValue;
-  while (*settingValue == ' ' || *settingValue == '\t') {
+  while (*settingValue == ' ' || *settingValue == '\t')
     ++settingValue;
-  }
   char *end = settingValue + strlen(settingValue);
   while (end > settingValue &&
-         (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r')) {
+         (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r'))
     --end;
-  }
   *end = '\0';
-  if (*settingValue == '\0') {
+  if (*settingValue == '\0')
     return SettingResult::Invalid;
-  }
   value = settingValue;
   return SettingResult::Valid;
 }
@@ -418,9 +366,12 @@ bool equalsIgnoreCase(const char *left, const char *right) {
   while (*left != '\0' && *right != '\0') {
     char leftChar = *left;
     char rightChar = *right;
-    if (leftChar >= 'A' && leftChar <= 'Z') leftChar = static_cast<char>(leftChar - 'A' + 'a');
-    if (rightChar >= 'A' && rightChar <= 'Z') rightChar = static_cast<char>(rightChar - 'A' + 'a');
-    if (leftChar != rightChar) return false;
+    if (leftChar >= 'A' && leftChar <= 'Z')
+      leftChar = static_cast<char>(leftChar - 'A' + 'a');
+    if (rightChar >= 'A' && rightChar <= 'Z')
+      rightChar = static_cast<char>(rightChar - 'A' + 'a');
+    if (leftChar != rightChar)
+      return false;
     ++left;
     ++right;
   }
@@ -443,14 +394,16 @@ bool parseBoolean(const char *value, bool &parsed) {
 
 bool isValidConfigHost(const char *host) {
   const size_t length = strlen(host);
-  if (length == 0 || length > MAX_CONFIG_HOST_LENGTH) return false;
+  if (length == 0 || length > MAX_CONFIG_HOST_LENGTH)
+    return false;
   for (size_t i = 0; i < length; ++i) {
     const char value = host[i];
     const bool alphaNumeric =
         (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
         (value >= '0' && value <= '9');
     if (!alphaNumeric && value != '.' && value != '-' && value != ':' &&
-        value != '[' && value != ']') return false;
+        value != '[' && value != ']')
+      return false;
   }
   return true;
 }
@@ -460,74 +413,110 @@ bool parseConfig(char *config, ParsedConfig &parsed) {
   bool structurallyValid = true;
   while (*line != '\0') {
     char *nextLine = strchr(line, '\n');
-    if (nextLine != nullptr) *nextLine = '\0';
-    while (*line == ' ' || *line == '\t' || *line == '\r') ++line;
+    if (nextLine != nullptr)
+      *nextLine = '\0';
+    while (*line == ' ' || *line == '\t' || *line == '\r')
+      ++line;
     if (*line != '#' && *line != '\0') {
       uint32_t value = 0;
       SettingResult result = parseSetting(line, "HB_INTERVAL_MIN", value);
       if (result != SettingResult::NotFound) {
-        if (parsed.heartbeatIntervalPresent) structurallyValid = false;
+        if (parsed.heartbeatIntervalPresent)
+          structurallyValid = false;
         parsed.heartbeatIntervalPresent = true;
-        parsed.heartbeatIntervalValid = result == SettingResult::Valid && value >= MIN_HEARTBEAT_INTERVAL_MIN && value <= MAX_HEARTBEAT_INTERVAL_MIN;
-        if (parsed.heartbeatIntervalValid) parsed.heartbeatIntervalMin = static_cast<uint16_t>(value);
+        parsed.heartbeatIntervalValid =
+            result == SettingResult::Valid &&
+            value >= MIN_HEARTBEAT_INTERVAL_MIN &&
+            value <= MAX_HEARTBEAT_INTERVAL_MIN;
+        if (parsed.heartbeatIntervalValid)
+          parsed.heartbeatIntervalMin = static_cast<uint16_t>(value);
       }
+
       const char *textValue = nullptr;
       result = parseTextSetting(line, "TUNNEL_ENABLED", textValue);
       if (result != SettingResult::NotFound) {
-        if (parsed.tunnelEnabledPresent) structurallyValid = false;
+        if (parsed.tunnelEnabledPresent)
+          structurallyValid = false;
         parsed.tunnelEnabledPresent = true;
-        parsed.tunnelEnabledValid = result == SettingResult::Valid && parseBoolean(textValue, parsed.tunnelEnabled);
+        parsed.tunnelEnabledValid =
+            result == SettingResult::Valid &&
+            parseBoolean(textValue, parsed.tunnelEnabled);
       }
+
       textValue = nullptr;
       result = parseTextSetting(line, "SSH_HOST", textValue);
       if (result != SettingResult::NotFound) {
-        if (parsed.sshHostPresent) structurallyValid = false;
+        if (parsed.sshHostPresent)
+          structurallyValid = false;
         parsed.sshHostPresent = true;
-        parsed.sshHostValid = result == SettingResult::Valid && isValidConfigHost(textValue);
-        if (parsed.sshHostValid) parsed.sshHost = textValue;
+        parsed.sshHostValid =
+            result == SettingResult::Valid && isValidConfigHost(textValue);
+        if (parsed.sshHostValid)
+          parsed.sshHost = textValue;
       }
+
       value = 0;
       result = parseSetting(line, "SSH_PORT", value);
       if (result != SettingResult::NotFound) {
-        if (parsed.sshPortPresent) structurallyValid = false;
+        if (parsed.sshPortPresent)
+          structurallyValid = false;
         parsed.sshPortPresent = true;
-        parsed.sshPortValid = result == SettingResult::Valid && value >= 1 && value <= 65535;
-        if (parsed.sshPortValid) parsed.sshPort = static_cast<uint16_t>(value);
+        parsed.sshPortValid = result == SettingResult::Valid && value >= 1 &&
+                              value <= 65535;
+        if (parsed.sshPortValid)
+          parsed.sshPort = static_cast<uint16_t>(value);
       }
+
       textValue = nullptr;
       result = parseTextSetting(line, "REMOTE_BIND_HOST", textValue);
       if (result != SettingResult::NotFound) {
-        if (parsed.remoteBindHostPresent) structurallyValid = false;
+        if (parsed.remoteBindHostPresent)
+          structurallyValid = false;
         parsed.remoteBindHostPresent = true;
-        parsed.remoteBindHostValid = result == SettingResult::Valid && isValidConfigHost(textValue);
-        if (parsed.remoteBindHostValid) parsed.remoteBindHost = textValue;
+        parsed.remoteBindHostValid =
+            result == SettingResult::Valid && isValidConfigHost(textValue);
+        if (parsed.remoteBindHostValid)
+          parsed.remoteBindHost = textValue;
       }
+
       value = 0;
       result = parseSetting(line, "REMOTE_BIND_PORT", value);
       if (result != SettingResult::NotFound) {
-        if (parsed.remoteBindPortPresent) structurallyValid = false;
+        if (parsed.remoteBindPortPresent)
+          structurallyValid = false;
         parsed.remoteBindPortPresent = true;
-        parsed.remoteBindPortValid = result == SettingResult::Valid && value >= 1 && value <= 65535;
-        if (parsed.remoteBindPortValid) parsed.remoteBindPort = static_cast<uint16_t>(value);
+        parsed.remoteBindPortValid =
+            result == SettingResult::Valid && value >= 1 && value <= 65535;
+        if (parsed.remoteBindPortValid)
+          parsed.remoteBindPort = static_cast<uint16_t>(value);
       }
+
       textValue = nullptr;
       result = parseTextSetting(line, "LOCAL_HOST", textValue);
       if (result != SettingResult::NotFound) {
-        if (parsed.localHostPresent) structurallyValid = false;
+        if (parsed.localHostPresent)
+          structurallyValid = false;
         parsed.localHostPresent = true;
-        parsed.localHostValid = result == SettingResult::Valid && isValidConfigHost(textValue);
-        if (parsed.localHostValid) parsed.localHost = textValue;
+        parsed.localHostValid =
+            result == SettingResult::Valid && isValidConfigHost(textValue);
+        if (parsed.localHostValid)
+          parsed.localHost = textValue;
       }
+
       value = 0;
       result = parseSetting(line, "LOCAL_PORT", value);
       if (result != SettingResult::NotFound) {
-        if (parsed.localPortPresent) structurallyValid = false;
+        if (parsed.localPortPresent)
+          structurallyValid = false;
         parsed.localPortPresent = true;
-        parsed.localPortValid = result == SettingResult::Valid && value >= 1 && value <= 65535;
-        if (parsed.localPortValid) parsed.localPort = static_cast<uint16_t>(value);
+        parsed.localPortValid = result == SettingResult::Valid && value >= 1 &&
+                                value <= 65535;
+        if (parsed.localPortValid)
+          parsed.localPort = static_cast<uint16_t>(value);
       }
     }
-    if (nextLine == nullptr) break;
+    if (nextLine == nullptr)
+      break;
     line = nextLine + 1;
   }
   return structurallyValid;
@@ -543,115 +532,80 @@ bool hasCompleteTunnelConfig(const ParsedConfig &parsed) {
          parsed.localHostValid && parsed.localPortValid;
 }
 
-bool writeCachedConfig(const ParsedConfig &parsed) {
+bool writeCachedHeartbeatInterval(uint16_t intervalMin) {
   removeIfExists(CACHED_CONFIG_TEMP_PATH);
   File file = LittleFS.open(CACHED_CONFIG_TEMP_PATH, "w");
-  if (!file) return false;
-  file.println(F("HB_DEBUG=0"));
-  file.println(F("HB_EXEC=no"));
-  file.print(F("HB_INTERVAL_MIN=")); file.println(parsed.heartbeatIntervalMin);
-  file.println();
-  file.print(F("TUNNEL_ENABLED=")); file.println(parsed.tunnelEnabled ? F("yes") : F("no"));
-  file.print(F("SSH_HOST=")); file.println(parsed.sshHost);
-  file.print(F("SSH_PORT=")); file.println(parsed.sshPort);
-  file.print(F("REMOTE_BIND_HOST=")); file.println(parsed.remoteBindHost);
-  file.print(F("REMOTE_BIND_PORT=")); file.println(parsed.remoteBindPort);
-  file.print(F("LOCAL_HOST=")); file.println(parsed.localHost);
-  file.print(F("LOCAL_PORT=")); file.println(parsed.localPort);
-  file.flush(); file.close();
+  if (!file)
+    return false;
+  file.print(F("HB_INTERVAL_MIN="));
+  file.println(intervalMin);
+  file.flush();
+  file.close();
+
   removeIfExists(CACHED_CONFIG_BACKUP_PATH);
   const bool hadExistingConfig = LittleFS.exists(CACHED_CONFIG_PATH);
-  if (hadExistingConfig && !LittleFS.rename(CACHED_CONFIG_PATH, CACHED_CONFIG_BACKUP_PATH)) {
-    removeIfExists(CACHED_CONFIG_TEMP_PATH); return false;
+  if (hadExistingConfig &&
+      !LittleFS.rename(CACHED_CONFIG_PATH, CACHED_CONFIG_BACKUP_PATH)) {
+    removeIfExists(CACHED_CONFIG_TEMP_PATH);
+    return false;
   }
   if (!LittleFS.rename(CACHED_CONFIG_TEMP_PATH, CACHED_CONFIG_PATH)) {
-    if (hadExistingConfig) LittleFS.rename(CACHED_CONFIG_BACKUP_PATH, CACHED_CONFIG_PATH);
-    removeIfExists(CACHED_CONFIG_TEMP_PATH); return false;
+    if (hadExistingConfig)
+      LittleFS.rename(CACHED_CONFIG_BACKUP_PATH, CACHED_CONFIG_PATH);
+    removeIfExists(CACHED_CONFIG_TEMP_PATH);
+    return false;
   }
   removeIfExists(CACHED_CONFIG_BACKUP_PATH);
   return true;
 }
 
+void loadCachedHeartbeatInterval() {
+  if (!LittleFS.exists(CACHED_CONFIG_PATH)) {
+    LOG_I("MINIS", "No cached heartbeat interval found");
+    return;
+  }
+  File file = LittleFS.open(CACHED_CONFIG_PATH, "r");
+  if (!file || file.size() == 0 || file.size() >= CONFIG_BUFFER_SIZE) {
+    if (file)
+      file.close();
+    LOG_W("MINIS", "Cached heartbeat interval is invalid");
+    return;
+  }
+
+  char config[CONFIG_BUFFER_SIZE] = {0};
+  const size_t size = file.size();
+  const size_t read = file.readBytes(config, size);
+  file.close();
+  if (read != size) {
+    LOG_W("MINIS", "Unable to read cached heartbeat interval");
+    return;
+  }
+  config[read] = '\0';
+
+  ParsedConfig parsed;
+  if (!parseConfig(config, parsed) || !parsed.heartbeatIntervalPresent ||
+      !parsed.heartbeatIntervalValid) {
+    LOG_W("MINIS", "Cached heartbeat interval is invalid");
+    return;
+  }
+  heartbeatIntervalMin = parsed.heartbeatIntervalMin;
+  LOGF_I("MINIS", "Cached HB_INTERVAL_MIN: %u",
+         static_cast<unsigned int>(heartbeatIntervalMin));
+}
+
 bool queueManagedConfig(const ParsedConfig &parsed) {
-  if (managedConfigQueue == nullptr) return false;
+  if (managedConfigQueue == nullptr)
+    return false;
   QueuedManagedConfig queued{};
   queued.enabled = parsed.tunnelEnabled;
   queued.sshPort = parsed.sshPort;
   queued.remoteBindPort = parsed.remoteBindPort;
   queued.localPort = parsed.localPort;
   strlcpy(queued.sshHost, parsed.sshHost, sizeof(queued.sshHost));
-  strlcpy(queued.remoteBindHost, parsed.remoteBindHost, sizeof(queued.remoteBindHost));
+  strlcpy(queued.remoteBindHost, parsed.remoteBindHost,
+          sizeof(queued.remoteBindHost));
   strlcpy(queued.localHost, parsed.localHost, sizeof(queued.localHost));
   return xQueueOverwrite(managedConfigQueue, &queued) == pdPASS;
-}
-
-bool processCandidateConfig(const ParsedConfig &parsed, bool persist) {
-  const bool anyCandidateField = parsed.tunnelEnabledPresent || parsed.sshHostPresent || parsed.sshPortPresent || parsed.remoteBindHostPresent || parsed.remoteBindPortPresent || parsed.localHostPresent || parsed.localPortPresent;
-  if (!anyCandidateField) return false;
-  if (!hasCompleteTunnelConfig(parsed)) {
-    LOG_W("MINIS", "Tunnel config candidate is incomplete or invalid");
-    return false;
-  }
-  const bool changed = !candidateTunnelKnown || parsed.heartbeatIntervalMin != candidateHeartbeatIntervalMin || parsed.tunnelEnabled != candidateTunnelEnabled || candidateSshHost != parsed.sshHost || parsed.sshPort != candidateSshPort || candidateRemoteBindHost != parsed.remoteBindHost || parsed.remoteBindPort != candidateRemoteBindPort || candidateLocalHost != parsed.localHost || parsed.localPort != candidateLocalPort;
-  if (!changed) {
-    if (persist && !queueManagedConfig(parsed)) {
-      LOG_W("MINIS", "Unable to queue Minis config for activation");
-      return false;
-    }
-    LOG_I("MINIS", persist ? "Fetched Minis config unchanged; activation check queued" : "Cached Minis config unchanged");
-    return true;
-  }
-  if (persist && !writeCachedConfig(parsed)) {
-    LOG_W("MINIS", "Unable to store tunnel config candidate");
-    return false;
-  }
-  candidateTunnelKnown = true;
-  candidateHeartbeatIntervalMin = parsed.heartbeatIntervalMin;
-  candidateTunnelEnabled = parsed.tunnelEnabled;
-  candidateSshHost = parsed.sshHost;
-  candidateSshPort = parsed.sshPort;
-  candidateRemoteBindHost = parsed.remoteBindHost;
-  candidateRemoteBindPort = parsed.remoteBindPort;
-  candidateLocalHost = parsed.localHost;
-  candidateLocalPort = parsed.localPort;
-  LOGF_I("MINIS", "%s tunnel config: enabled=%s ssh=%s@%s:%u remote=%s:%u local=%s:%u", persist ? "Stored" : "Cached", candidateTunnelEnabled ? "yes" : "no", sid().c_str(), candidateSshHost.c_str(), static_cast<unsigned int>(candidateSshPort), candidateRemoteBindHost.c_str(), static_cast<unsigned int>(candidateRemoteBindPort), candidateLocalHost.c_str(), static_cast<unsigned int>(candidateLocalPort));
-  if (persist) {
-    if (!queueManagedConfig(parsed)) {
-      LOG_W("MINIS", "Unable to queue Minis config for activation");
-      return false;
-    }
-    LOG_I("MINIS", "Tunnel activation check queued; using locally stored key");
-  } else {
-    LOG_I("MINIS", "Cached tunnel config loaded; awaiting fresh Minis config");
-  }
-  return true;
-}
-
-void loadCachedConfig() {
-  if (!LittleFS.exists(CACHED_CONFIG_PATH)) {
-    LOG_I("MINIS", "No cached Minis config found");
-    return;
-  }
-  File file = LittleFS.open(CACHED_CONFIG_PATH, "r");
-  if (!file) {
-    LOG_W("MINIS", "Cached Minis config could not be opened");
-    return;
-  }
-  const size_t size = file.size();
-  if (size == 0 || size >= CONFIG_BUFFER_SIZE) {
-    file.close(); LOG_W("MINIS", "Cached Minis config has an invalid size"); return;
-  }
-  char config[CONFIG_BUFFER_SIZE] = {0};
-  const size_t read = file.readBytes(config, size);
-  file.close();
-  if (read != size) { LOG_W("MINIS", "Unable to read cached Minis config"); return; }
-  config[read] = '\0';
-  ParsedConfig parsed;
-  if (!parseConfig(config, parsed) || !parsed.heartbeatIntervalPresent || !parsed.heartbeatIntervalValid || !hasCompleteTunnelConfig(parsed)) {
-    LOG_W("MINIS", "Cached Minis config is invalid"); return;
-  }
-  heartbeatIntervalMin = parsed.heartbeatIntervalMin;
-  processCandidateConfig(parsed, false);
 }
 
 bool refreshConfig() {
@@ -659,91 +613,69 @@ bool refreshConfig() {
     LOG_W("MINIS", "Config check skipped: WiFi not connected");
     return false;
   }
+
   char config[CONFIG_BUFFER_SIZE] = {0};
   size_t configLength = 0;
-  const int status = performGet("/cfg.txt", config, sizeof(config), &configLength);
+  const int status =
+      performGet("/cfg.txt", config, sizeof(config), &configLength);
   if (status != 200) {
-    LOGF_I("MINIS", "cfg.txt unavailable (HTTP %d); keeping %u min", status, static_cast<unsigned int>(heartbeatIntervalMin));
+    LOGF_I("MINIS", "cfg.txt unavailable (HTTP %d); keeping %u min", status,
+           static_cast<unsigned int>(heartbeatIntervalMin));
     return false;
   }
+
   ParsedConfig parsed;
   if (configLength == 0 || !parseConfig(config, parsed)) {
-    LOG_W("MINIS", "cfg.txt contains duplicate or malformed settings"); return false;
+    LOG_W("MINIS", "cfg.txt contains duplicate or malformed settings");
+    return false;
   }
-  if (!parsed.heartbeatIntervalPresent || !parsed.heartbeatIntervalValid) {
-    LOGF_W("MINIS", "cfg.txt has no valid HB_INTERVAL_MIN; keeping %u min", static_cast<unsigned int>(heartbeatIntervalMin)); return false;
+  if (!parsed.heartbeatIntervalPresent || !parsed.heartbeatIntervalValid ||
+      !hasCompleteTunnelConfig(parsed)) {
+    LOG_W("MINIS", "cfg.txt is incomplete or invalid; ignoring it");
+    return false;
   }
+
   if (parsed.heartbeatIntervalMin != heartbeatIntervalMin) {
-    LOGF_I("MINIS", "HB_INTERVAL_MIN changed: %u -> %u", static_cast<unsigned int>(heartbeatIntervalMin), static_cast<unsigned int>(parsed.heartbeatIntervalMin));
+    LOGF_I("MINIS", "HB_INTERVAL_MIN changed: %u -> %u",
+           static_cast<unsigned int>(heartbeatIntervalMin),
+           static_cast<unsigned int>(parsed.heartbeatIntervalMin));
     heartbeatIntervalMin = parsed.heartbeatIntervalMin;
+    if (!writeCachedHeartbeatInterval(heartbeatIntervalMin))
+      LOG_W("MINIS", "Unable to cache HB_INTERVAL_MIN");
   } else {
-    LOGF_I("MINIS", "HB_INTERVAL_MIN: %u", static_cast<unsigned int>(heartbeatIntervalMin));
+    LOGF_I("MINIS", "HB_INTERVAL_MIN: %u",
+           static_cast<unsigned int>(heartbeatIntervalMin));
   }
-  return processCandidateConfig(parsed, true);
-}
 
-bool refreshConfigWithMemoryRecovery() {
-  lastTlsMemoryPressure = false;
-  if (refreshConfig()) {
-    return true;
-  }
-  if (!lastTlsMemoryPressure) {
+  if (!queueManagedConfig(parsed)) {
+    LOG_W("MINIS", "Unable to queue Minis config for comparison");
     return false;
   }
-
-  LOG_W("MINIS", "TLS heap pressure detected during config fetch; requesting temporary SSH pause");
-  controlPlanePauseConfirmed = false;
-  controlPlanePauseDeferred = false;
-  controlPlanePauseRequested = true;
-  const unsigned long started = millis();
-  while (!controlPlanePauseConfirmed && !controlPlanePauseDeferred &&
-         millis() - started < CONTROL_PLANE_PAUSE_TIMEOUT_MS) {
-    vTaskDelay(pdMS_TO_TICKS(20));
-  }
-
-  if (controlPlanePauseDeferred) {
-    controlPlanePauseRequested = false;
-    controlPlanePauseDeferred = false;
-    LOG_I("MINIS", "Config TLS retry deferred because an SSH channel is active");
-    return false;
-  }
-
-  if (!controlPlanePauseConfirmed) {
-    controlPlanePauseRequested = false;
-    LOG_W("MINIS", "SSH pause request timed out; config retry deferred");
-    return false;
-  }
-
-  vTaskDelay(pdMS_TO_TICKS(100));
-  logTlsHeap("after-ssh-pause");
-  const bool retryConfigOk = refreshConfig();
-  if (!retryConfigOk) {
-    LOG_W("MINIS", "Config retry still failed after SSH pause");
-  }
-
-  controlPlanePauseRequested = false;
-  controlPlanePauseConfirmed = false;
-  controlPlaneResumeRequested = true;
-  return retryConfigOk;
+  LOG_I("MINIS", "Fresh cfg.txt queued for comparison with stored settings");
+  return true;
 }
 
 uint32_t nextHeartbeatDelaySeconds() {
-  const uint32_t baseSeconds = static_cast<uint32_t>(heartbeatIntervalMin) * 60U;
+  const uint32_t baseSeconds =
+      static_cast<uint32_t>(heartbeatIntervalMin) * 60U;
   const uint32_t jitterSeconds = esp_random() % (baseSeconds + 1U);
   return baseSeconds + jitterSeconds;
 }
 
 void heartbeatTask(void *) {
-  loadCachedConfig();
+  loadCachedHeartbeatInterval();
   vTaskDelay(pdMS_TO_TICKS(INITIAL_CONFIG_DELAY_MS));
-  refreshConfigWithMemoryRecovery();
+  refreshConfig();
+
   while (true) {
     const uint32_t delaySeconds = nextHeartbeatDelaySeconds();
     LOGF_I("MINIS", "Next heartbeat in %lu min %lu sec",
            static_cast<unsigned long>(delaySeconds / 60U),
            static_cast<unsigned long>(delaySeconds % 60U));
     vTaskDelay(pdMS_TO_TICKS(static_cast<uint64_t>(delaySeconds) * 1000ULL));
-    sendHeartbeat(false);
+
+    if (sendHeartbeat(false))
+      refreshConfig();
   }
 }
 
@@ -765,7 +697,8 @@ bool registerClient() {
 }
 
 bool startHeartbeatTask() {
-  if (heartbeatTaskHandle != nullptr) return true;
+  if (heartbeatTaskHandle != nullptr)
+    return true;
   if (managedConfigQueue == nullptr) {
     managedConfigQueue = xQueueCreate(1, sizeof(QueuedManagedConfig));
     if (managedConfigQueue == nullptr) {
@@ -773,7 +706,8 @@ bool startHeartbeatTask() {
       return false;
     }
   }
-  if (xTaskCreate(heartbeatTask, "minis_hb", HEARTBEAT_TASK_STACK_BYTES, nullptr, 1, &heartbeatTaskHandle) != pdPASS) {
+  if (xTaskCreate(heartbeatTask, "minis_hb", HEARTBEAT_TASK_STACK_BYTES,
+                  nullptr, 1, &heartbeatTaskHandle) != pdPASS) {
     heartbeatTaskHandle = nullptr;
     vQueueDelete(managedConfigQueue);
     managedConfigQueue = nullptr;
@@ -784,9 +718,11 @@ bool startHeartbeatTask() {
 }
 
 bool takeManagedTunnelConfig(ManagedTunnelConfig &config) {
-  if (managedConfigQueue == nullptr) return false;
+  if (managedConfigQueue == nullptr)
+    return false;
   QueuedManagedConfig queued{};
-  if (xQueueReceive(managedConfigQueue, &queued, 0) != pdPASS) return false;
+  if (xQueueReceive(managedConfigQueue, &queued, 0) != pdPASS)
+    return false;
   config.enabled = queued.enabled;
   config.sshHost = queued.sshHost;
   config.sshPort = queued.sshPort;
@@ -794,24 +730,6 @@ bool takeManagedTunnelConfig(ManagedTunnelConfig &config) {
   config.remoteBindPort = queued.remoteBindPort;
   config.localHost = queued.localHost;
   config.localPort = queued.localPort;
-  return true;
-}
-
-bool tunnelPauseRequestedForControlPlane() {
-  return controlPlanePauseRequested;
-}
-
-void confirmTunnelPausedForControlPlane() {
-  controlPlanePauseConfirmed = true;
-}
-
-void deferTunnelPauseForControlPlane() {
-  controlPlanePauseDeferred = true;
-}
-
-bool takeTunnelResumeRequest() {
-  if (!controlPlaneResumeRequested) return false;
-  controlPlaneResumeRequested = false;
   return true;
 }
 
