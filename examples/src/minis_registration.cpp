@@ -29,6 +29,7 @@ constexpr uint32_t HEARTBEAT_TASK_STACK_BYTES = 6144;
 constexpr size_t CONFIG_BUFFER_SIZE = 768;
 constexpr size_t MAX_CONFIG_HOST_LENGTH = 253;
 constexpr size_t MINIS_TLS_MIN_LARGEST_BLOCK = 31 * 1024;
+constexpr size_t MINIS_HEARTBEAT_MIN_FREE_HEAP = 70 * 1024;
 constexpr uint32_t CONTROL_PLANE_PAUSE_TIMEOUT_MS = 5000;
 constexpr const char *CACHED_CONFIG_PATH = "/minis.cfg";
 constexpr const char *CACHED_CONFIG_TEMP_PATH = "/minis.cfg.tmp";
@@ -274,8 +275,18 @@ int performGet(const char *suffix, char *response, size_t responseCapacity,
 
 int performHeartbeatHead() {
   lastTlsMemoryPressure = false;
+  const size_t freeBefore = ESP.getFreeHeap();
   const size_t largestBefore =
       heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  if (freeBefore < MINIS_HEARTBEAT_MIN_FREE_HEAP) {
+    lastTlsMemoryPressure = true;
+    LOGF_W("MINIS",
+           "Heartbeat TLS deferred: free heap %u is below %u bytes (largest=%u); SSH left untouched",
+           static_cast<unsigned int>(freeBefore),
+           static_cast<unsigned int>(MINIS_HEARTBEAT_MIN_FREE_HEAP),
+           static_cast<unsigned int>(largestBefore));
+    return -2;
+  }
   if (largestBefore < MINIS_TLS_MIN_LARGEST_BLOCK) {
     lastTlsMemoryPressure = true;
     LOGF_W("MINIS",
