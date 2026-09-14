@@ -21,10 +21,10 @@ String sid();
 // creates /hb/<sid>/ when it sees the first MHB request for an unknown SID.
 bool registerClient();
 
-// Starts the Minis background task. It loads the cached heartbeat interval,
-// checks cfg.txt once shortly after startup, sends jittered heartbeats, and
-// checks cfg.txt again after each successful heartbeat. TLS work is skipped
-// when the C3 does not have enough free/contiguous heap.
+// Starts the Minis background task. It loads the cached heartbeat interval
+// and fetches cfg.txt once per heartbeat cycle. That single HTTPS GET is both
+// the heartbeat and the configuration check. TLS work is skipped when the C3
+// does not have enough free/contiguous heap.
 bool startHeartbeatTask();
 
 // Returns the latest complete tunnel config received from Minis. The main task
