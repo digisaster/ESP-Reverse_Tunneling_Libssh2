@@ -21,24 +21,15 @@ String sid();
 // creates /hb/<sid>/ when it sees the first MHB request for an unknown SID.
 bool registerClient();
 
-// Starts the non-blocking Minis service task. It reads cfg.txt, applies the
-// bounded HB_INTERVAL_MIN, and sends heartbeats with fresh 0..interval jitter.
-// A complete SSH/reverse-tunnel config is validated and stored as /minis.cfg.
-// Runtime activation is handed to the main task to avoid touching the SSH
-// session from this background task.
+// Starts the Minis background task. It loads the cached heartbeat interval,
+// checks cfg.txt once shortly after startup, sends jittered heartbeats, and
+// checks cfg.txt again after each successful heartbeat. TLS work is skipped
+// when the C3 does not have enough free/contiguous heap.
 bool startHeartbeatTask();
 
-// Returns the latest complete config received from Minis, if one is waiting.
+// Returns the latest complete tunnel config received from Minis. The main task
+// persists changed settings and restarts the device; the background task never
+// manipulates the SSH session directly.
 bool takeManagedTunnelConfig(ManagedTunnelConfig &config);
-
-// TLS on the C3 can temporarily run out of contiguous heap while libssh2 is
-// active. The Minis background task never manipulates the SSH tunnel directly;
-// instead it requests a short maintenance window from the main task. The main
-// task may confirm the pause when the tunnel is idle, or defer the request when
-// an active forwarded channel must not be interrupted.
-bool tunnelPauseRequestedForControlPlane();
-void confirmTunnelPausedForControlPlane();
-void deferTunnelPauseForControlPlane();
-bool takeTunnelResumeRequest();
 
 } // namespace minis_registration
