@@ -27,7 +27,7 @@ static constexpr unsigned long STATS_INTERVAL = 10000;
 #endif
 
 #if SSH_TUNNEL_LOW_MEMORY_PROFILE
-static constexpr int TUNNEL_TRANSPORT_BUFFER_SIZE = 4096;
+static constexpr int TUNNEL_TRANSPORT_BUFFER_SIZE = 2048;
 static constexpr int TUNNEL_MAX_CHANNELS = 1;
 static constexpr size_t TUNNEL_RING_BUFFER_SIZE = 8 * 1024;
 #else
