@@ -374,6 +374,26 @@ void reportStats() {
   LOGF_I("SYSTEM", "Free Heap: %d bytes (min: %d, largest: %d)", freeHeap,
          minFreeHeap, largestFreeBlock);
   LOGF_I("SYSTEM", "Uptime: %lu seconds", millis() / 1000);
+
+#if INCLUDE_xTaskGetHandle == 1 && INCLUDE_uxTaskGetStackHighWaterMark == 1
+  static TaskHandle_t minisTask = nullptr;
+  static TaskHandle_t buttonTask = nullptr;
+  if (minisTask == nullptr)
+    minisTask = xTaskGetHandle("minis_hb");
+  if (buttonTask == nullptr)
+    buttonTask = xTaskGetHandle("cfg-button");
+  if (minisTask != nullptr) {
+    const UBaseType_t freeStack = uxTaskGetStackHighWaterMark(minisTask);
+    LOGF_I("STACK", "minis_hb minimum free stack: %u bytes",
+           static_cast<unsigned int>(freeStack));
+  }
+  if (buttonTask != nullptr) {
+    const UBaseType_t freeStack = uxTaskGetStackHighWaterMark(buttonTask);
+    LOGF_I("STACK", "cfg-button minimum free stack: %u bytes",
+           static_cast<unsigned int>(freeStack));
+  }
+#endif
+
   if (freeHeap < CRITICAL_FREE_HEAP_BYTES)
     LOGF_W("MEMORY", "Critical free heap: %u bytes", (unsigned)freeHeap);
   if (freeHeap >= CRITICAL_FREE_HEAP_BYTES &&
