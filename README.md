@@ -136,10 +136,10 @@ If automatic bootloader entry fails on an ESP32-S2:
 
 The hardware-validated `esp32_c3_lowmem` environment targets an ESP32-C3
 DevKitM-1 compatible board without PSRAM. It intentionally allows one listener
-and one active forwarded channel, uses a 4 KB transport buffer, 8 KB per tunnel
-direction, and a 4 KB prepend buffer. Native USB CDC is enabled for boards that
-expose the ESP32-C3 USB-Serial/JTAG interface directly. The remote listener
-port is selected explicitly on the tunnel setup page.
+and one active forwarded channel, uses a 2 KB transport buffer, 8 KB per tunnel
+direction, and a 2 KB prepend capacity per directional ring. Native USB CDC is
+enabled for boards that expose the ESP32-C3 USB-Serial/JTAG interface directly.
+The remote listener port is selected explicitly on the tunnel setup page.
 
 ```powershell
 pio run -e esp32_c3_lowmem
@@ -157,8 +157,8 @@ Replace `COM9` with the detected port. Validation on the tested C3 covered:
 5. Zero dropped bytes and heap recovery after closing the channel.
 6. ECDSA P-256 authentication with an EC-PEM private key and matching public
    key, followed by reverse-listener creation.
-7. Minis heartbeat/config retrieval, public-key upload, SID-based SSH login,
-   managed listener activation, and persistence after successful activation.
+7. Minis bootstrap, public-key upload, SID-based SSH login, periodic managed
+   `cfg.txt` retrieval, and persisted configuration applied after reboot.
 
 The tested profile is suitable as the ESP32-C3 reference configuration.
 Boards with a different flash layout or USB implementation may still need a
@@ -182,11 +182,22 @@ Do not publish LittleFS images or device backups containing credentials.
 
 ### Minis-managed configuration
 
-The reference firmware checks `/hb/<sid>/cfg.txt` at startup and after each
-heartbeat. A complete configuration can enable or disable the tunnel and set
-`SSH_HOST`, `SSH_PORT`, `REMOTE_BIND_HOST`, `REMOTE_BIND_PORT`, `LOCAL_HOST`,
-and `LOCAL_PORT`. The SSH username is always the lowercase eight-character SID;
-no `SSH_USER` field is accepted.
+After the initial Minis bootstrap, the periodic heartbeat and configuration
+check are the same HTTPS request:
+
+```text
+GET /hb/<sid>/cfg.txt
+```
+
+The reference firmware also performs one `cfg.txt` fetch shortly after the
+control-plane task starts. There is no separate periodic `HEAD /ping` request.
+Each scheduled cycle creates one short-lived TLS connection, fetches the config,
+then closes the connection.
+
+A complete configuration can enable or disable the tunnel and set `SSH_HOST`,
+`SSH_PORT`, `REMOTE_BIND_HOST`, `REMOTE_BIND_PORT`, `LOCAL_HOST`, and
+`LOCAL_PORT`. The SSH username is always the lowercase eight-character SID; no
+`SSH_USER` field is accepted.
 
 The **private key and passphrase remain local on the ESP32** and are never
 uploaded to or downloaded from Minis. When a matching public key is configured,
@@ -204,13 +215,27 @@ similar to:
 [MINIS] Public key uploaded for SID 48e6ebac -> ui/ssh_public_key.txt
 ```
 
-A new managed configuration is stored only after its SSH session and reverse
-listener succeed. If activation fails, the firmware restores the previous
-runtime configuration. The validated ESP32-C3 proof of concept successfully
-used SID `48e6ebac` as the managed SSH username and activated
-`127.0.0.1:23182 -> 192.168.19.10:22` after public-key authentication.
+A valid managed config is compared with the settings currently stored on the
+device. When the tunnel settings are unchanged, no action is taken. When they
+change, the firmware stores the new `/esp32tun.cfg` and restarts. The new tunnel
+configuration is applied through the normal boot path. There is no live tunnel
+replacement or rollback state machine.
 
-Heartbeat checks retain randomized scheduling jitter: the configured
+If the Minis request fails, is deferred for memory pressure, or returns an
+invalid/incomplete `cfg.txt`, the current SSH session and stored configuration
+are left untouched.
+
+The ESP32-C3 control-plane TLS guard currently requires at least 70 KiB total
+free heap and a largest free block of at least 31 KiB before starting a Minis
+TLS connection. This protects SSH from known low-memory conditions, but it is a
+safety guard rather than a guarantee of TLS success. The latest measured
+active-channel state with the 2 KB buffer profile is around 72-73 KB free; a TLS
+attempt at about 72.8 KB still failed cleanly from memory pressure while the SSH
+channel remained connected with zero dropped bytes. See
+[ESP32-C3 memory and stability notes](docs/ESP32_C3_MEMORY_NOTES.md) for the
+measured details.
+
+Heartbeat/config scheduling retains randomized jitter: the configured
 `HB_INTERVAL_MIN` is the base interval and a random delay from zero through the
 same base interval is added. This spreads device requests between one and two
 times the configured base interval.
@@ -221,8 +246,8 @@ is sent through this channel. TLS certificate validation is required before
 production deployment. SSH host-key verification is also currently disabled
 and remains a separate production-hardening task.
 
-See the [example guide](examples/README.md) for the complete `cfg.txt` format,
-validated flow, and current proof-of-concept security boundary.
+See the [example guide](examples/README.md) for the complete `cfg.txt` format
+and runtime flow.
 
 ## Status LED
 
@@ -329,19 +354,19 @@ configuration. Applications can use `clearTunnelMappings()`,
 `setMaxReverseListeners()`, and `addTunnelMapping()` to configure several
 listeners before `connectSSH()`.
 
-## Tested resource usage
+## Resource usage
 
-Latest release builds:
-
-| Environment | RAM | Flash |
-| --- | ---: | ---: |
-| `lolin_s2_mini` | 62,820 / 327,680 bytes (19.2%) | 1,161,070 / 1,310,720 bytes (88.6%) |
-| `esp32_c3_lowmem` | 39,432 / 327,680 bytes (12.0%) | 1,226,524 / 1,310,720 bytes (93.6%) |
+PlatformIO prints the current static RAM and flash usage at build time. Use the
+current output of the target you are testing instead of relying on historical
+figures in documentation; memory-sensitive runtime decisions in this project
+are based on measured free heap, minimum heap, and largest free block on real
+hardware.
 
 ## Documentation
 
 - [Example guide](examples/README.md)
 - [Technical documentation](docs/README.md)
+- [ESP32-C3 memory and stability notes](docs/ESP32_C3_MEMORY_NOTES.md)
 - [SSH key authentication](docs/SSH_KEYS_MEMORY.md)
 - [Host-key verification](docs/HOST_KEY_VERIFICATION.md)
 - [Integration tests](test/integration/README.md)
