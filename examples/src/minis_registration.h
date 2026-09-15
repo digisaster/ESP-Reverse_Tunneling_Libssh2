@@ -27,6 +27,10 @@ bool registerClient();
 // does not have enough free/contiguous heap.
 bool startHeartbeatTask();
 
+// Lifetime minimum free stack for the Minis background task, in bytes.
+// Returns 0 while the task is not running.
+size_t heartbeatTaskStackHighWaterMark();
+
 // Returns the latest complete tunnel config received from Minis. The main task
 // persists changed settings and restarts the device; the background task never
 // manipulates the SSH session directly.
