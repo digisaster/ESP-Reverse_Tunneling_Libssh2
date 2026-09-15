@@ -115,7 +115,7 @@ bool startConfigButtonTask() {
 #if ESP32TUN_CONFIG_BUTTON_PIN >= 0
   if (buttonTaskHandle)
     return true;
-  const BaseType_t result = xTaskCreate(configButtonTask, "cfg-button", 2048,
+  const BaseType_t result = xTaskCreate(configButtonTask, "cfg-button", 1024,
                                         nullptr, 1, &buttonTaskHandle);
   if (result != pdPASS) {
     buttonTaskHandle = nullptr;
