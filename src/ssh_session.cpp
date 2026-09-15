@@ -433,9 +433,9 @@ LIBSSH2_CHANNEL *SSHSession::acceptChannel(TunnelConfig &outMapping) {
                "SERVERDIAG forward_accept_error err=%d fatal=%d "
                "fatal_count=%d remote=%s:%d local=%s:%d bound=%d",
                acceptErr, fatal ? 1 : 0, consecutiveFatalAcceptErrors_,
-               entry.mapping.remoteBindHost.c_str(), entry.mapping.remoteBindPort,
-               entry.mapping.localHost.c_str(), entry.mapping.localPort,
-               entry.boundPort);
+               entry.mapping.remoteBindHost.c_str(),
+               entry.mapping.remoteBindPort, entry.mapping.localHost.c_str(),
+               entry.mapping.localPort, entry.boundPort);
       }
     }
     unsigned long now = millis();
@@ -708,7 +708,7 @@ bool SSHSession::verifyHostKey(const SSHServerConfig &sshConfig) {
       const String actualForCallback =
           expectedIsBase64 ? fingerprintOpenSSH : fingerprintHex;
       sshConfig.onHostKeyMismatch(expectedRaw, actualForCallback, keyTypeStr,
-                                  sshConfig.onHostKeyMismatchContext);
+                                  sshConfig.hostKeyMismatchContext);
     }
     return false;
   }
