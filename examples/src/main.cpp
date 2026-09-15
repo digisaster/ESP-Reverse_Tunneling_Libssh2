@@ -226,7 +226,7 @@ void configureCommonTunnelSettings() {
 #if SSH_TUNNEL_LOW_MEMORY_PROFILE
   globalSSHConfig.setMaxReverseListeners(1);
 #endif
-  globalSSHConfig.setConnectionConfig(120, 5000, 5, 30);
+  globalSSHConfig.setConnectionConfig(30, 5000, 5, 30);
   globalSSHConfig.setBufferConfig(TUNNEL_TRANSPORT_BUFFER_SIZE,
                                   TUNNEL_MAX_CHANNELS, 1800000,
                                   TUNNEL_RING_BUFFER_SIZE);
