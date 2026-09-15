@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 2026-09-03
+## [Unreleased] — 2026-09-15
 
 This is the candidate baseline for `esp32tun` reference firmware
 `1.0.0-beta.1`. The Arduino library retains its existing 2.x version line.
@@ -28,9 +28,28 @@ This is the candidate baseline for `esp32tun` reference firmware
   disabled timeouts, and `millis()` wraparound.
 - Initial `esp32_c3_lowmem` build profile for a single reverse listener and
   active channel on ESP32-C3 boards without PSRAM.
-- Minis `cfg.txt` can now activate, disable, and replace the reference
-  firmware's single tunnel at runtime. The lowercase SID is used as SSH
-  username while the existing device-local key pair is retained.
+- Minis `cfg.txt` can activate, disable, and replace the reference firmware's
+  single tunnel. The lowercase SID is used as SSH username while the existing
+  device-local key pair is retained.
+- A total-free-heap guard was added to the Minis HTTPS path. On ESP32-C3 the
+  control plane now requires at least 70 KiB total free heap and a largest free
+  block of at least 31 KiB before attempting TLS.
+
+### Changed
+
+- Managed Minis configuration now follows a simpler persist-and-restart model.
+  A valid changed `cfg.txt` is written to `/esp32tun.cfg` and the device
+  restarts; the new tunnel settings are applied through the normal boot path.
+  The previous live reconfiguration, rollback, and control-plane SSH
+  pause/resume logic has been removed.
+- Periodic Minis heartbeat and config retrieval are now one request:
+  `GET /hb/<sid>/cfg.txt`. The separate `HEAD /ping` transaction was removed,
+  eliminating a second TLS handshake per cycle.
+- The ESP32-C3 low-memory transport buffer was reduced from 4 KB to 2 KB and
+  the per-ring prepend capacity from 4 KB to 2 KB. The proven 8 KB directional
+  channel rings remain unchanged.
+- The Minis cache now stores only `HB_INTERVAL_MIN`; tunnel settings remain in
+  the device runtime configuration file.
 
 ### Fixed
 
@@ -60,41 +79,42 @@ This is the candidate baseline for `esp32tun` reference firmware
   reserve instead of treating every healthy sub-50-KB ESP32-C3 heap as low.
 - Public-key failures now report actionable key-pair and `authorized_keys`
   checks instead of always suggesting an OpenSSH-to-PEM conversion.
-- Managed configuration is persisted only after the new SSH session and
-  listener succeed. Failed activation restores the previous runtime settings;
-  configuration writes use a recoverable temporary/backup-file replacement.
 - Optional LittleFS cleanup now checks for temporary files before removing
   them, avoiding misleading `vfs_api.cpp` errors during successful updates.
 
 ### Validated
 
-- WEMOS LOLIN S2 Mini release build: 62,420 bytes RAM (19.0%) and 1,065,046
-  bytes flash (81.3%).
+- WEMOS LOLIN S2 Mini release build and tunnel operation remain validated from
+  the beta baseline.
 - Interactive SSH forwarding remained connected for 45 minutes without the
   former 30-second idle disconnect.
-- ESP32-C3 low-memory release build: 39,080 bytes RAM (11.9%) and 1,134,840
-  bytes flash (86.6%).
 - ESP32-C3 hardware testing confirmed an active forwarded SSH channel,
   repeated channel close and reopen, 30-second keepalive messages, zero dropped
   bytes, and heap recovery after channel closure.
 - ESP32-C3 hardware testing confirmed unencrypted RSA-PEM private-key
   authentication and reverse-listener creation.
-- ESP32-C3 hardware testing confirmed ECDSA P-256 authentication using a
-  226-byte EC-PEM private key and matching OpenSSH public-key line. The SSH
-  session authenticated on its first attempt, created the reverse listener,
-  and reached the connected state after a device reset. Ed25519 client keys
+- ESP32-C3 hardware testing confirmed ECDSA P-256 authentication using an
+  EC-PEM private key and matching OpenSSH public-key line. Ed25519 client keys
   remain unsupported by the pinned mbedTLS backend; ECDSA P-384 and P-521 have
   not yet been hardware-tested.
-- Minis-managed settings survived a hardware reset, authenticated directly as
-  the lowercase SID, recreated listener `23182`, and forwarded an interactive
-  channel with 1,915 bytes sent, 1,997 bytes received, and zero dropped bytes.
+- Minis-managed settings survived hardware reset, authenticated directly as
+  the lowercase SID, recreated the reverse listener, and forwarded an
+  interactive channel with zero dropped bytes.
+- The 2 KB transport/prepend profile increased measured active-channel free
+  heap from roughly 64-65 KB to roughly 72-73 KB while keeping the 8 KB
+  directional rings and zero dropped bytes.
+- A Minis TLS attempt at approximately 72.8 KB total free heap still failed
+  cleanly from memory pressure; the SSH session and active forwarded channel
+  remained connected with zero dropped bytes. This confirms the control-plane
+  guard is a safety threshold rather than a TLS-success guarantee.
 
 ### Documentation
 
-- Added safe configuration, build, flash, serial-monitor, reverse-listener,
-  stale-listener, and channel-timeout instructions.
-- Added a technical record of the pinned `libssh2_esp` RSA compatibility patch
-  and the validated beta baseline.
+- Updated the ESP32-C3 memory notes to the current 2 KB buffer profile,
+  70 KiB total-free guard, combined heartbeat/config request, and
+  persist-and-restart managed configuration flow.
+- Removed stale documentation claims about live managed activation, rollback,
+  separate periodic ping requests, and obsolete control-plane pause/recovery.
 - Added a one-command Windows ESP32-C3 build check that rejects stale
   `C:\pio` installations and automatically repairs the known nested-toolchain
   layout used by the failing workstation.
