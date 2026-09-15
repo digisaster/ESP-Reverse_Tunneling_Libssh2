@@ -1,27 +1,116 @@
-# ESP32-C3 heartbeat TLS measurement protocol
+# ESP32-C3 heartbeat TLS measurement record
 
-Last updated: 2026-09-14
+Last updated: 2026-09-15
 
-This document defines the measurement step that must be completed before adding a total-free-heap guard to the ESP32-C3 Minis heartbeat path.
+This document records the measurement plan that was used to determine whether
+total free heap should be considered together with the largest free block
+before starting Minis TLS on the ESP32-C3.
 
-The authoritative design constraints and previously rejected approaches remain documented in `ESP32_C3_MEMORY_NOTES.md`.
+**Status: completed / historical.**
 
-## Purpose
+The measurement phase described here has already been performed. The resulting
+runtime decisions and latest measured values are maintained in
+`ESP32_C3_MEMORY_NOTES.md`, which is now the authoritative source for current
+memory thresholds and control-plane behaviour.
 
-Determine from real runtime data whether total free heap, together with the existing largest-free-block measurement, can reliably predict when a short-lived Minis heartbeat TLS handshake is likely to fail.
+Do not use this file as a current implementation guide.
 
-This step intentionally does **not** change heartbeat thresholds, SSH buffers, ring buffers, config-fetch recovery, or SSH reconnect behaviour.
+## What the measurement established
 
-The current accepted priority remains:
+Earlier firmware guarded Minis TLS mainly by largest free block. Real hardware
+showed that this was insufficient: an active forwarded channel could have a
+largest free block around 32 KB while total free heap was only about 61-63 KB,
+and mbedTLS could still fail from memory pressure.
 
-1. keep the SSH session alive;
-2. keep an active forwarded channel alive;
-3. avoid dropped payload;
-4. deliver heartbeat only when memory permits it safely.
+The preferred behaviour was therefore validated as:
 
-A failed or deferred heartbeat is acceptable. A heartbeat must not intentionally disconnect a healthy SSH tunnel or active forwarded channel.
+```text
+insufficient memory for Minis TLS
+    -> do not disturb SSH
+    -> defer the control-plane request
+    -> retry later
+```
 
-## Build under test
+A total-free-heap guard was subsequently added. Current code requires at least
+70 KiB total free heap and at least 31 KiB largest free block before starting a
+Minis TLS connection.
+
+Later optimization reduced the ESP32-C3 transport buffer and prepend capacity
+from 4 KB to 2 KB while keeping the proven 8 KB directional ring buffers. That
+raised measured free heap with one active forwarded channel from roughly
+64-65 KB to roughly 72-73 KB.
+
+A TLS attempt at approximately:
+
+```text
+free=72848
+largest=32756
+```
+
+still failed with an mbedTLS memory-allocation error. The SSH session and active
+forwarded channel remained connected and `Bytes Dropped` stayed at zero.
+
+This confirms two things:
+
+1. the current guard safely avoids known lower-memory cases but is not a TLS
+   success guarantee;
+2. further work should prefer reducing unnecessary permanent RAM over lowering
+   the guard or disconnecting SSH.
+
+## Current control-plane request
+
+The original measurement plan referred to a separate heartbeat request. That is
+no longer the current architecture.
+
+After bootstrap, the periodic heartbeat and configuration retrieval are now one
+request:
+
+```text
+GET /hb/<SID>/cfg.txt
+```
+
+The former separate `HEAD /hb/<SID>/ping` request was removed to avoid two TLS
+handshakes per cycle.
+
+## Current test rule for future memory changes
+
+For any future memory-sensitive optimization, use the current firmware and
+compare the same three operating states:
+
+### A. SSH connected, no forwarded channel
+
+Verify:
+
+```text
+Tunnel State: Connected
+Active Channels: 0
+Bytes Dropped: 0
+```
+
+Record free heap, largest free block, minimum heap, and the result of a scheduled
+Minis `GET cfg.txt`.
+
+### B. One real forwarded channel active
+
+Generate real traffic and verify:
+
+```text
+Tunnel State: Connected
+Active Channels: 1
+Bytes Dropped: 0
+```
+
+Keep the forwarded connection active across a scheduled Minis request. A
+deferred or failed TLS request is acceptable only if SSH traffic remains usable,
+keepalives continue, and no payload is dropped.
+
+### C. Close only the forwarded channel
+
+Close the forwarded client without rebooting or intentionally disconnecting the
+main SSH session. Confirm that channel memory is released and that a later Minis
+request can succeed again when enough heap is available.
+
+## Normal test commands
 
 Use only:
 
@@ -29,9 +118,7 @@ Use only:
 esp32_c3_lowmem
 ```
 
-Do not erase flash for this test.
-
-Normal commands:
+Do not erase flash for normal memory testing.
 
 ```powershell
 pio run -e esp32_c3_lowmem
@@ -39,160 +126,17 @@ pio run -e esp32_c3_lowmem -t upload
 pio device monitor -e esp32_c3_lowmem --baud 115200
 ```
 
-## Existing instrumentation
+## Pass criteria for future optimization
 
-No extra runtime instrumentation is required for the first measurement round.
+A memory optimization is only accepted when real runtime evidence still shows:
 
-The current firmware already reports the required memory values around heartbeat TLS:
-
-```text
-TLS heap heartbeat-before: free=<bytes> largest=<bytes> min=<bytes>
-TLS heap heartbeat-connected: free=<bytes> largest=<bytes> min=<bytes>
-```
-
-or, when the connection attempt fails:
-
-```text
-TLS heap heartbeat-connect-failed: free=<bytes> largest=<bytes> min=<bytes>
-```
-
-The normal statistics output also reports:
-
-```text
-Tunnel State: Connected
-Active Channels: 0|1
-Bytes Sent: ...
-Bytes Received: ...
-Bytes Dropped: ...
-Free Heap: ... (min: ..., largest: ...)
-```
-
-These values are sufficient to correlate heartbeat success or failure with both total free heap and the largest free block without changing the memory-sensitive runtime path.
-
-## Test sequence
-
-Run the same flashed firmware through the following three states. Do not reboot between states unless the tunnel itself becomes unusable.
-
-### A. SSH connected, no forwarded channel
-
-Wait until the main SSH tunnel is connected and `Active Channels: 0`.
-
-Capture at least three heartbeat attempts if practical.
-
-For every attempt record:
-
-- total free heap immediately before heartbeat TLS;
-- largest free block immediately before heartbeat TLS;
-- minimum free heap;
-- heartbeat result / HTTP status;
-- SSH tunnel state after the attempt;
-- active channel count after the attempt;
-- `Bytes Dropped`.
-
-### B. One real forwarded channel active
-
-Open one real forwarded connection and generate actual traffic through it.
-
-Verify first:
-
-```text
-Tunnel State: Connected
-Active Channels: 1
-Bytes Dropped: 0
-```
-
-Keep the forwarded connection active across one or more scheduled heartbeat attempts.
-
-For every heartbeat attempt record the same fields as in state A.
-
-A TLS error such as:
-
-```text
-SSL - Memory allocation failed
-```
-
-is acceptable during this phase **only** when all of the following remain true:
-
-```text
-Tunnel State: Connected
-Active Channels: 1
-Bytes Dropped: 0
-```
-
-and forwarded traffic continues to work.
-
-### C. Close only the forwarded channel
-
-Close the forwarded client/channel without rebooting and without intentionally disconnecting the main SSH session.
-
-Verify that:
-
-```text
-Tunnel State: Connected
-Active Channels: 0
-```
-
-Then capture subsequent heartbeat attempts and confirm whether free heap recovers and TLS succeeds again.
-
-## Measurement table
-
-Record observations in this form:
-
-| State | Attempt | Free before | Largest before | Min heap | Heartbeat result | Active channels after | Tunnel after | Bytes dropped |
-| --- | ---: | ---: | ---: | ---: | --- | ---: | --- | ---: |
-| Idle SSH | 1 | | | | | 0 | Connected | 0 |
-| Idle SSH | 2 | | | | | 0 | Connected | 0 |
-| Active channel | 1 | | | | | 1 | Connected | 0 |
-| Active channel | 2 | | | | | 1 | Connected | 0 |
-| Channel closed | 1 | | | | | 0 | Connected | 0 |
-| Channel closed | 2 | | | | | 0 | Connected | 0 |
-
-More samples are preferable when they occur naturally, but do not alter the heartbeat interval merely to generate more data unless that is a separate deliberate experiment.
-
-## What this test must answer
-
-The important question is not merely whether `largest free block` is large enough.
-
-The already validated baseline showed approximately:
-
-```text
-free=61-63 KB
-largest=32756 bytes
-```
-
-with an active forwarded channel, while a new heartbeat TLS handshake could still fail from memory pressure.
-
-The test must therefore determine whether successful and failed attempts show a useful separation in **total free heap** while keeping the existing largest-block value visible.
-
-Do not choose a total-heap threshold from a single observation.
-
-## Decision rule after measurement
-
-Only after collecting real samples should a code change be considered.
-
-If the measurements show a repeatable memory range in which heartbeat TLS failure is predictable, the preferred future behaviour is:
-
-```text
-free heap too low for reliable heartbeat TLS
-    -> defer heartbeat before creating WiFiClientSecure/TLS state
-    -> leave SSH session untouched
-    -> leave active forwarded channel untouched
-```
-
-Any proposed threshold must include a safety margin derived from the measured successful and failed attempts.
-
-If the results overlap too much to choose a reliable threshold, do not add a guessed total-heap guard. Keep the current failure-safe behaviour and investigate further instead.
-
-## Pass criteria for the baseline
-
-This measurement round is considered safe when, throughout states A through C:
-
-- the main SSH session remains connected except for unrelated failures;
-- an active forwarded channel survives heartbeat memory pressure;
-- real forwarded traffic continues during the active-channel test;
-- SSH keepalive continues normally;
+- the main SSH session remains stable;
+- an active forwarded channel remains usable;
+- SSH keepalives continue;
 - `Bytes Dropped` remains `0`;
-- closing the forwarded channel releases memory again;
-- a later heartbeat can succeed again when sufficient memory returns.
+- channel close releases its memory again;
+- control-plane failure or deferral does not disturb SSH;
+- idle control-plane requests still succeed.
 
-Build success alone does not satisfy this test. Runtime logs are the evidence.
+For current thresholds, rejected approaches, measured values, and design rules,
+see `ESP32_C3_MEMORY_NOTES.md`.
