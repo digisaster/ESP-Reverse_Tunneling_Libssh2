@@ -1,41 +1,51 @@
 # ESP-Reverse_Tunneling_Libssh2 Documentation
 
-This documentation covers all aspects of the ESP-Reverse_Tunneling_Libssh2 library.
+This documentation covers the ESP-Reverse_Tunneling_Libssh2 library and the
+reference `esp32tun` firmware.
 
-## 📖 Main Guides
+## Main guides
+
+### [ESP32_C3_MEMORY_NOTES.md](ESP32_C3_MEMORY_NOTES.md)
+Authoritative ESP32-C3 low-memory design and measurement record:
+
+- current 2 KB transport/prepend profile
+- 8 KB directional channel rings
+- Minis TLS memory guard
+- combined heartbeat/config request
+- measured active-channel heap behaviour
+- rejected memory approaches
 
 ### [SSH_KEYS_MEMORY.md](SSH_KEYS_MEMORY.md)
-Complete guide for SSH key authentication with in-memory storage:
+SSH key authentication with in-memory use:
 
 - SSH key configuration
-- Secure LittleFS storage  
-- Supported key formats
-- Practical examples
+- LittleFS storage
+- tested key formats
+- practical examples
 
 ### [HOST_KEY_VERIFICATION.md](HOST_KEY_VERIFICATION.md)
 Security guide for host key verification:
 
-- Protection against Man-in-the-Middle attacks
-- Server fingerprint configuration
-- Verification API
-- Security best practices
-- Migration and troubleshooting
+- protection against man-in-the-middle attacks
+- server fingerprint configuration
+- verification API
+- migration and troubleshooting
 
-## 🔧 Configuration
+## Configuration
 
-### Password authentication (simple)
+### Password authentication
 
 ```cpp
 globalSSHConfig.setSSHServer("server.com", 22, "username", "password");
 ```
 
-### SSH key authentication (recommended)
+### SSH key authentication
 
-- [RSA key authentication fix and ESP32-C3 validation](RSA_KEY_AUTH_FIX.md)
+See [RSA key authentication fix and ESP32-C3 validation](RSA_KEY_AUTH_FIX.md).
 
 ```cpp
 globalSSHConfig.setSSHKeyAuthFromMemory(
-    "server.com", 22, "username", 
+    "server.com", 22, "username",
     privateKeyData, publicKeyData, ""
 );
 ```
@@ -58,66 +68,65 @@ globalSSHConfig.setHostKeyVerification(
 
 // Tunnel configuration
 globalSSHConfig.setTunnelConfig(
-    "127.0.0.1", 8080,    // Remote server bind
-    "192.168.1.100", 80 // Local target (ESP32)
+    "127.0.0.1", 8080,
+    "192.168.1.100", 80
 );
 ```
 
-## 📊 Supported Key Formats
+## Supported key formats
 
 | Format | Compatibility | Recommendation |
 |--------|---------------|----------------|
-| Modern OpenSSH (`-----BEGIN OPENSSH PRIVATE KEY-----`) | 🧪 Not validated | Convert to a tested PEM format |
-| PKCS#8 (`-----BEGIN PRIVATE KEY-----`) | 🧪 Not validated | Test before deployment |
-| PEM RSA (`-----BEGIN RSA PRIVATE KEY-----`) | ✅ Hardware validated | Public-key line optional |
-| PEM EC (`-----BEGIN EC PRIVATE KEY-----`) | ✅ P-256 validated | Matching public-key line required |
+| PEM RSA (`-----BEGIN RSA PRIVATE KEY-----`) | Hardware validated | Tested baseline |
+| PEM EC (`-----BEGIN EC PRIVATE KEY-----`) | P-256 hardware validated | Matching public-key line required |
+| PKCS#8 (`-----BEGIN PRIVATE KEY-----`) | Not systematically validated | Test before deployment |
+| Modern OpenSSH (`-----BEGIN OPENSSH PRIVATE KEY-----`) | Not systematically validated | Prefer a tested PEM format |
 
-## 🔐 Supported Key Algorithms
+## Supported key algorithms
 
-| Algorithm | Support | Recommended Size |
-|-----------|---------|------------------|
-| **Ed25519** | ❌ Not compiled in mbedTLS backend | — |
-| RSA | ✅ Hardware validated | 2048 bits tested |
-| ECDSA P-256 | ✅ Hardware validated | 256 bits |
-| ECDSA P-384 | 🧪 Not hardware-tested | 384 bits |
-| ECDSA P-521 | 🧪 Not hardware-tested | 521 bits |
-| DSA | ❌ Not supported | — |
+| Algorithm | Support | Recommendation |
+|-----------|---------|----------------|
+| Ed25519 | Not compiled in mbedTLS backend | Do not use for this firmware |
+| RSA | Hardware validated | 2048 bits tested |
+| ECDSA P-256 | Hardware validated | Compact tested option |
+| ECDSA P-384 | Not hardware-tested | Test before use |
+| ECDSA P-521 | Not hardware-tested | Test before use |
+| DSA | Not supported | Do not use |
 
-## 🛡️ Security Levels
+## Security levels
 
-### Development (level 1)
+### Development
 
 ```cpp
 globalSSHConfig.setSSHServer("server.com", 22, "user", "password");
-// No host verification
 ```
 
-### Basic production (level 2)  
+### Key-based authentication
 
 ```cpp
 globalSSHConfig.setSSHKeyAuthFromMemory(/* SSH keys */);
-// Key-based auth but no host verification
 ```
 
-### Secure production (level 3) - **Recommended**
+### Production hardening
 
 ```cpp
 globalSSHConfig.setSSHKeyAuthFromMemory(/* SSH keys */);
 globalSSHConfig.setHostKeyVerification(/* server fingerprint */);
-// Key-based auth + host verification
 ```
 
-## 🚀 Quick Start
+The current reference firmware still uses `setInsecure()` for Minis HTTPS and
+has SSH host-key verification disabled. Both remain production-hardening tasks.
 
-### 1. Installation
+## Quick start
+
+### Installation
 
 ```ini
-# platformio.ini
-lib_deps = 
-    https://github.com/playmiel/ESP-Reverse_Tunneling_Libssh2.git
+lib_deps =
+    https://github.com/digisaster/ESP-Reverse_Tunneling_Libssh2.git
 ```
 
-### 2. Minimal code
+### Minimal code
 
 ```cpp
 #include "ESP-Reverse_Tunneling_Libssh2.h"
@@ -125,13 +134,8 @@ lib_deps =
 SSHTunnel tunnel;
 
 void setup() {
-    // WiFi configuration
     WiFi.begin("SSID", "PASSWORD");
-    
-    // SSH configuration
     globalSSHConfig.setSSHKeyAuthFromMemory(/* parameters */);
-    
-    // Initialization
     tunnel.init();
     tunnel.connectSSH();
 }
@@ -141,57 +145,54 @@ void loop() {
 }
 ```
 
-### 3. Status check
+## ESP32-C3 low-memory reference profile
 
-```cpp
-if (tunnel.isConnected()) {
-    Serial.println("Tunnel active");
-    Serial.printf("Active channels: %d\n", tunnel.getActiveChannels());
-    Serial.printf("Bytes received: %lu bytes\n", tunnel.getBytesReceived());
-    Serial.printf("Bytes sent: %lu bytes\n", tunnel.getBytesSent());
-}
+The current `esp32_c3_lowmem` profile intentionally supports one active
+forwarded channel and uses:
+
+```text
+transport buffer:       2048 bytes
+max active channels:    1
+ring buffer per side:   8192 bytes
+prepend capacity:       2048 bytes per ring
+SSH keepalive:          30 seconds
 ```
 
-## 🔍 Troubleshooting
+Do not reduce the proven 8 KB channel rings merely to create room for Minis
+TLS. See [ESP32_C3_MEMORY_NOTES.md](ESP32_C3_MEMORY_NOTES.md) before changing
+memory-sensitive code.
 
-### Common issues
+## Minis-managed configuration
 
-#### "Authentication failed"
-- ✅ Check key format (prefer PKCS#8)
-- ✅ Ensure public key is in `authorized_keys`
-- ✅ Test manual SSH connection from a PC
+After the initial SID bootstrap, the periodic heartbeat and configuration check
+are one short-lived HTTPS request:
 
-#### "Host key verification failed"  
-- ✅ Get the real server fingerprint
-- ✅ Check configured fingerprint
-- ✅ Ensure it's not an attack
-
-#### "Connection timeout"
-- ✅ Verify network connectivity
-- ✅ Check SSH port open
-- ✅ Test with a standard SSH client
-
-### Useful logs
-```cpp
-// Enable detailed debug
-globalSSHConfig.setDebugConfig(true, 115200);
-
-// Diagnose SSH keys
-globalSSHConfig.diagnoseSSHKeys();
+```text
+GET /hb/<sid>/cfg.txt
 ```
 
-## 📈 Performance Optimizations
+There is no separate periodic `HEAD /ping`. A valid changed configuration is
+stored and the ESP32 restarts; the new tunnel settings are applied on the next
+boot. Failed/deferred control-plane requests leave SSH untouched.
 
-### Memory
-- Use the hardware-validated ECDSA P-256 key pair for compact credentials
-- Adjust `bufferSize` according to usage
-- Limit `maxChannels` to what you need
+## Performance optimization rules
 
-### Network
-- Tune `keepAliveIntervalSec`
-- Use built-in network optimizations and backpressure
+For the C3 profile:
 
-### Recommended configuration
+- limit `maxChannels` to the number actually required;
+- keep the tested 8 KB directional rings unless new runtime evidence supports a
+  change;
+- measure free heap, minimum heap, and largest free block on hardware;
+- change one memory mechanism at a time;
+- validate real forwarded traffic and keep `Bytes Dropped` at zero;
+- prefer removing unnecessary state/tasks/buffers over adding recovery state
+  machines.
+
+For general library builds, tune transport and ring sizes to the target and
+traffic pattern rather than copying the C3 values blindly.
+
+## Recommended general configuration
+
 ```cpp
 globalSSHConfig.setConnectionConfig(
     30,    // Keep-alive: 30s
@@ -201,22 +202,21 @@ globalSSHConfig.setConnectionConfig(
 );
 
 globalSSHConfig.setBufferConfig(
-    8192,       // Buffer size: 8KB
-    5,          // Max channels: 5
-    1800000,    // Channel inactivity timeout: 30 minutes (0 = disabled)
+    8192,       // Transport buffer size
+    5,          // Max channels
+    1800000,    // Channel inactivity timeout: 30 minutes
     64 * 1024   // Ring buffer size per channel, per direction
 );
 ```
 
 The third `setBufferConfig` argument applies to each forwarded channel, not to
 the outer SSH session. Activity in either direction resets the timer. A value
-of `0` keeps idle forwarded channels open indefinitely. Use SSH keepalives
-separately to detect a dead outer session.
+of `0` keeps idle forwarded channels open indefinitely.
 
-### Multi-tunnel / multiple listeners
+## Multi-tunnel / multiple listeners
 
-Use `addTunnelMapping()` and `setMaxReverseListeners()` to expose several
-local services through a single SSH connection:
+Use `addTunnelMapping()` and `setMaxReverseListeners()` to expose several local
+services through a single SSH connection:
 
 ```cpp
 globalSSHConfig.clearTunnelMappings();
@@ -227,33 +227,48 @@ globalSSHConfig.addTunnelMapping("127.0.0.1", 22081, "192.168.1.150", 502);
 globalSSHConfig.addTunnelMapping("127.0.0.1", 22082, "192.168.1.200", 22);
 ```
 
-Listeners bound to `127.0.0.1` are reachable only from the remote SSH server.
-To use such a listener from another computer, first create a local forward
-through that server, for example:
+Listeners are created at `connectSSH()` time. Adding mappings while a session is
+active requires a reconnect to take effect.
 
-```bash
-ssh -L 23181:127.0.0.1:22082 bastion-user@bastion.example.com
+## Troubleshooting
+
+### Authentication failed
+
+- use a hardware-validated key format where possible;
+- verify the matching public key is present in `authorized_keys`;
+- test the same credentials with a standard SSH client;
+- for ECDSA P-256, provide both the EC-PEM private key and matching OpenSSH
+  public-key line.
+
+### Host key verification failed
+
+- obtain the real server fingerprint;
+- verify the configured algorithm and fingerprint;
+- do not bypass a mismatch in production.
+
+### Connection timeout
+
+- verify network connectivity;
+- verify the SSH port is reachable;
+- test from a standard SSH client.
+
+### Useful logs
+
+```cpp
+globalSSHConfig.setDebugConfig(true, 115200);
+globalSSHConfig.diagnoseSSHKeys();
 ```
 
-Keep that session open and run this in a second terminal:
+## Related documents
 
-```bash
-ssh -p 23181 local-device-user@127.0.0.1
-```
-
-> **Note:** Listeners are created at `connectSSH()` time. Adding mappings
-> while a session is active requires a reconnect to take effect.
-
-## 📞 Support
-
-For questions or issues:
-
-1. Consult this documentation
-2. Check the [examples/](../examples/)
-3. Enable debug logs
-4. Open a GitHub issue
+- [Example firmware](../examples/README.md)
+- [ESP32-C3 memory notes](ESP32_C3_MEMORY_NOTES.md)
+- [Historical heartbeat measurement record](ESP32_C3_HEARTBEAT_MEASUREMENT.md)
+- [SSH key authentication](SSH_KEYS_MEMORY.md)
+- [RSA key authentication fix](RSA_KEY_AUTH_FIX.md)
+- [Host-key verification](HOST_KEY_VERIFICATION.md)
 
 ---
 
-**Documentation version:** 1.1
-**Last update:** 2026-08-26
+**Documentation version:** 1.2
+**Last update:** 2026-09-15
