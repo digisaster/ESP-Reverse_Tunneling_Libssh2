@@ -306,21 +306,20 @@ TransportPump::TransportPump() {}
 
 TransportPump::~TransportPump() {
   SAFE_FREE(rxBuf_);
-  SAFE_FREE(txBuf_);
+  txBuf_ = nullptr;
 }
 
 bool TransportPump::init(size_t bufferSize, unsigned long channelTimeoutMs) {
   bufSize_ = bufferSize;
   channelTimeoutMs_ = channelTimeoutMs;
-  rxBuf_ = static_cast<uint8_t *>(safeMalloc(bufSize_, "tp_rxBuf"));
-  txBuf_ = static_cast<uint8_t *>(safeMalloc(bufSize_, "tp_txBuf"));
-  if (!rxBuf_ || !txBuf_) {
-    LOG_E("SSH", "TransportPump: failed to allocate buffers");
-    SAFE_FREE(rxBuf_);
-    SAFE_FREE(txBuf_);
+  rxBuf_ = static_cast<uint8_t *>(safeMalloc(bufSize_, "tp_workBuf"));
+  txBuf_ = rxBuf_;
+  if (!rxBuf_) {
+    LOG_E("SSH", "TransportPump: failed to allocate shared buffer");
+    txBuf_ = nullptr;
     return false;
   }
-  LOGF_I("SSH", "TransportPump initialized: %zuB buffers", bufSize_);
+  LOGF_I("SSH", "TransportPump initialized: %zuB shared buffer", bufSize_);
   return true;
 }
 
