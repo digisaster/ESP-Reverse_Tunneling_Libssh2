@@ -17,8 +17,8 @@ Center control plane. This happens before SSH or reverse-tunnel setup is
 complete. The device performs its SID bootstrap registration, starts the
 heartbeat/config service, and begins fetching `/hb/<sid>/cfg.txt` while the
 second setup page can still be active. A device can therefore appear in Minis
-and keep sending heartbeats even when SSH credentials are missing or the SSH
-server is unavailable.
+and keep performing control-plane checks even when SSH credentials are missing
+or the SSH server is unavailable.
 
 The temporary second page configures password or private-key SSH
 authentication and one reverse tunnel. ECDSA authentication also requires the
@@ -74,12 +74,13 @@ pio run -e esp32_c3_lowmem --target upload --upload-port COM9
 pio device monitor -e esp32_c3_lowmem --port COM9 --baud 115200
 ```
 
-The profile is deliberately limited to one active channel. Its buffer budget
-is approximately 32 KB before libssh2, Wi-Fi, and allocator overhead:
+The profile is deliberately limited to one active channel. Its explicit
+transport/ring/prepend budget is approximately 24 KB before libssh2, Wi-Fi,
+FreeRTOS, sockets, TLS, and allocator overhead:
 
-- 2 x 4 KB transport buffers
+- 2 x 2 KB transport work buffers
 - 2 x 8 KB directional ring buffers
-- 2 x 4 KB prepend buffers
+- 2 x 2 KB prepend capacity
 
 Do not enable `ENABLE_MULTI_TUNNEL_DEMO` for this profile. Hardware validation
 confirmed repeated channel close and reopen, 30-second keepalive messages, zero
@@ -96,10 +97,17 @@ warning; warnings are reserved for critically low usable heap.
 ## Minis-managed tunnel configuration
 
 The Minis control plane is independent of the SSH tunnel. Once WiFi is
-available, the firmware registers the SID, starts its heartbeat task, and
-requests `/hb/<sid>/cfg.txt`. The first config fetch is scheduled shortly after
-the control-plane task starts; subsequent heartbeat/config checks follow the
-configured interval plus jitter.
+available, the firmware registers the SID and starts its control-plane task.
+After bootstrap, the periodic heartbeat and config retrieval are the same
+request:
+
+```text
+GET /hb/<sid>/cfg.txt
+```
+
+There is no separate periodic `HEAD /ping`. The first config fetch is scheduled
+shortly after the task starts; later checks follow the configured interval plus
+jitter.
 
 A complete managed configuration has this form:
 
@@ -120,37 +128,35 @@ and are never downloaded from or uploaded to Minis. Managed activation is
 therefore accepted only when private-key authentication is already configured
 locally.
 
-A configuration may be fetched and cached before SSH provisioning is complete.
-Tunnel activation remains a separate step and requires a locally available
-private key. Failure to establish SSH does not stop the Minis heartbeat/config
-service.
-
 When private-key authentication has a matching public key, normal startup also
-uploads that **public key only** through the existing Minis `uploot.php` route.
-It is stored as:
+uploads that **public key only** through the existing Minis upload route. It is
+stored as:
 
 ```text
 /hb/<sid>/ui/ssh_public_key.txt
 ```
 
-The upload uses `dest=ui`, so a later startup can replace the same public-key
-file. The private key never leaves the ESP32. A successful upload is logged as:
+The private key never leaves the ESP32. A successful upload is logged as:
 
 ```text
 [MINIS] Public key uploaded for SID <sid> -> ui/ssh_public_key.txt
 ```
 
-Hardware validation on ESP32-C3 confirmed the complete flow with SID
-`48e6ebac`: the public key was uploaded, Minis supplied a managed configuration
-for `48e6ebac@edp.supcom.nl:443`, public-key authentication succeeded, and the
-managed reverse listener `127.0.0.1:23182 -> 192.168.19.10:22` was activated
-and stored.
+When a valid fetched configuration differs from the stored tunnel settings,
+the firmware writes the updated managed configuration to `/esp32tun.cfg` and
+restarts. The new tunnel configuration is applied through the normal boot path.
+There is no live tunnel replacement, no rollback state machine, and no
+control-plane pause/resume of SSH.
 
-When a valid fetched configuration differs from the active settings, the
-firmware stops the current tunnel and tries the new SSH session and listener.
-It stores the new settings only after activation succeeds. On failure it
-restores and reconnects the previous configuration. `TUNNEL_ENABLED=no`
-cleanly stops the tunnel while WiFi and the heartbeat service remain active.
+If `cfg.txt` is incomplete or malformed, or if the HTTPS request fails or is
+deferred, the current stored configuration and SSH session are left untouched.
+
+The ESP32-C3 low-memory profile currently protects the control plane with a TLS
+memory guard. A Minis request is only started when total free heap is at least
+70 KiB and the largest free block is at least 31 KiB. This is a safety check,
+not a guarantee that TLS will succeed. Measured active-channel states around
+72-73 KB can still be too tight for mbedTLS, but a failed request leaves the SSH
+channel connected and does not drop payload.
 
 The heartbeat interval is supplied by `HB_INTERVAL_MIN`. Scheduling deliberately
 adds random jitter from zero up to the configured base interval, so the next
@@ -163,6 +169,9 @@ certificate is not authenticated. No private key is sent through this channel.
 Certificate validation is required before treating Minis transport as
 production-hardened. SSH host-key verification is also still disabled in the
 current reference firmware and remains a separate production-hardening item.
+
+See `../docs/ESP32_C3_MEMORY_NOTES.md` for the current measured memory baseline
+and rejected optimization approaches.
 
 ## Single and multiple tunnels
 
@@ -207,8 +216,16 @@ to begin even before SSH setup is complete:
 [MINIS] Control-center heartbeat/config service started
 ```
 
-The first `cfg.txt` fetch follows shortly afterward. For a configured tunnel,
-wait for both messages before testing SSH forwarding:
+The periodic request then looks like:
+
+```text
+[MINIS] Heartbeat/config GET: https://cloud.supcom.nl/hb/<sid>/cfg.txt
+[MINIS] HB_INTERVAL_MIN: ...
+[MINIS] Fresh cfg.txt queued for comparison with stored settings
+[MINIS] Next heartbeat/config check in ...
+```
+
+For a configured tunnel, wait for both messages before testing SSH forwarding:
 
 ```text
 Reverse listener ready ...
