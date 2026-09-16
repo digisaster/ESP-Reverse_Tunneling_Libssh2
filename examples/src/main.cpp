@@ -375,6 +375,14 @@ void reportStats() {
          minFreeHeap, largestFreeBlock);
   LOGF_I("SYSTEM", "Uptime: %lu seconds", millis() / 1000);
 
+#ifdef TUNNEL_INSTRUMENT
+  char transportPerf[512];
+  if (tunnel.dumpTransportInstrumentation(transportPerf,
+                                          sizeof(transportPerf)) > 0) {
+    LOGF_I("PERF", "TRANSPORT %s", transportPerf);
+  }
+#endif
+
 #if INCLUDE_xTaskGetHandle == 1 && INCLUDE_uxTaskGetStackHighWaterMark == 1
   static TaskHandle_t minisTask = nullptr;
   static TaskHandle_t buttonTask = nullptr;
