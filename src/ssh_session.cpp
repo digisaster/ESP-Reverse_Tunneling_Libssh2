@@ -1,7 +1,9 @@
 #include "ssh_session.h"
 #include "forward_accept_error.h"
 #include "network_optimizations.h"
+#include <Arduino.h>
 #include <arpa/inet.h>
+#include <esp_heap_caps.h>
 #include <lwip/netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -86,6 +88,14 @@ static String publicKeyDiagnosticTag(const String &key) {
   return String(text);
 }
 
+static void logSshConnectHeap(const char *stage) {
+  LOGF_I("MEMORY", "SSH_CONNECT_HEAP stage=%s free=%u min=%u largest=%u",
+         stage, static_cast<unsigned int>(ESP.getFreeHeap()),
+         static_cast<unsigned int>(ESP.getMinFreeHeap()),
+         static_cast<unsigned int>(
+             heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)));
+}
+
 static unsigned long gLastCleanupCompletedMs = 0;
 static constexpr int kAcceptFatalReconnectThreshold = 3;
 
@@ -127,6 +137,7 @@ bool SSHSession::connect(SSHConfiguration *config) {
   LOGF_I("SSH",
          "CONNECT_STAGE=START session=%p fd=%d since_cleanup=%lums",
          session_, socketfd_, sinceCleanupMs);
+  logSshConnectHeap("START");
 
   if (session_) {
     LOG_W("SSH", "connect: leftover session, cleaning up");
@@ -142,30 +153,41 @@ bool SSHSession::connect(SSHConfiguration *config) {
 
   if (!tcpConnect(sshConfig)) {
     LOG_E("SSH", "CONNECT_STAGE=TCP_FAILED");
+    logSshConnectHeap("TCP_FAILED");
     return false;
   }
+  logSshConnectHeap("TCP_CONNECTED");
   if (!handshake()) {
     LOG_E("SSH", "CONNECT_STAGE=HANDSHAKE_FAILED");
+    logSshConnectHeap("HANDSHAKE_FAILED");
     cleanupSession();
     return false;
   }
+  logSshConnectHeap("HANDSHAKE_OK");
   if (!verifyHostKey(sshConfig)) {
     LOG_E("SSH", "CONNECT_STAGE=HOSTKEY_FAILED");
+    logSshConnectHeap("HOSTKEY_FAILED");
     cleanupSession();
     return false;
   }
+  logSshConnectHeap("HOSTKEY_OK");
   if (!authenticate(sshConfig)) {
     LOG_E("SSH", "CONNECT_STAGE=AUTH_FAILED");
+    logSshConnectHeap("AUTH_FAILED");
     cleanupSession();
     return false;
   }
+  logSshConnectHeap("AUTH_OK");
   if (!configureKeepalive(connConfig)) {
   }
+  logSshConnectHeap("KEEPALIVE_CONFIGURED");
   if (!createListeners(config_)) {
     LOG_E("SSH", "CONNECT_STAGE=LISTENER_FAILED_AFTER_AUTH");
+    logSshConnectHeap("LISTENER_FAILED");
     cleanupSession();
     return false;
   }
+  logSshConnectHeap("LISTENER_OK");
 
   libssh2_session_set_blocking(session_, 0);
 
@@ -177,6 +199,7 @@ bool SSHSession::connect(SSHConfiguration *config) {
 
   LOGF_I("SSH", "CONNECT_STAGE=READY session=%p fd=%d setup_ms=%lums",
          session_, socketfd_, millis() - connectStartedMs);
+  logSshConnectHeap("READY");
   LOG_I("SSH", "SSH session fully connected (non-blocking mode active)");
   return true;
 }
@@ -1035,6 +1058,7 @@ void SSHSession::cleanupSession() {
   const size_t listenersBefore = listeners_.size();
   LOGF_I("SSH", "SESSION_CLEANUP=BEGIN session=%p fd=%d listeners=%u",
          session_, socketfd_, static_cast<unsigned int>(listenersBefore));
+  logSshConnectHeap("CLEANUP_BEGIN");
 
   cancelAllListeners();
 
@@ -1104,4 +1128,5 @@ void SSHSession::cleanupSession() {
          fdBeforeClose, disconnectRc, freeRc, closeRc,
          forcedWithoutLock ? "yes" : "no", session_ ? "yes" : "no",
          gLastCleanupCompletedMs - cleanupStartedMs);
+  logSshConnectHeap("CLEANUP_END");
 }
