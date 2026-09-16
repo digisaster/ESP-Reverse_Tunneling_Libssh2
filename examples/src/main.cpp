@@ -230,7 +230,8 @@ void configureCommonTunnelSettings() {
   globalSSHConfig.setBufferConfig(TUNNEL_TRANSPORT_BUFFER_SIZE,
                                   TUNNEL_MAX_CHANNELS, 1800000,
                                   TUNNEL_RING_BUFFER_SIZE);
-  globalSSHConfig.setDebugConfig(false, 115200);
+  globalSSHConfig.setDebugConfig(true, 115200);
+  globalSSHConfig.setLogLevel(LOG_INFO);
   registerTunnelCallbacks();
 }
 
