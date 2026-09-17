@@ -163,6 +163,11 @@ void connectWiFi() {
   status_led::set(status_led::State::Connecting);
   LOG_I("WIFI", "Connecting to WiFi...");
   WiFi.mode(WIFI_STA);
+  if (!mac_vendor::prepareStation(deviceConfig.macVendor)) {
+    status_led::set(status_led::State::Error);
+    LOG_E("WIFI", "Unable to apply configured MAC vendor; WiFi connect aborted");
+    return;
+  }
   WiFi.begin(deviceConfig.wifiSsid.c_str(), deviceConfig.wifiPassword.c_str());
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 30) {
@@ -178,6 +183,8 @@ void connectWiFi() {
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println();
     LOG_I("WIFI", "WiFi connected successfully");
+    LOGF_I("WIFI", "MAC address: %s (%s)", WiFi.macAddress().c_str(),
+           mac_vendor::configValue(deviceConfig.macVendor));
     LOGF_I("WIFI", "IP address: %s", WiFi.localIP().toString().c_str());
     LOGF_I("WIFI", "Signal strength: %d dBm", WiFi.RSSI());
   } else {
@@ -267,6 +274,13 @@ void applyPendingMinisConfig() {
   if (!minis_registration::takeManagedTunnelConfig(managed))
     return;
 
+  MacVendor managedMacVendor = deviceConfig.macVendor;
+  if (managed.macVendorPresent &&
+      !mac_vendor::parse(managed.macVendor, managedMacVendor)) {
+    LOG_W("MINIS", "cfg.txt contains an unsupported MAC_VENDOR; configuration ignored");
+    return;
+  }
+
   const String managedUsername = minis_registration::sid();
   const bool unchanged =
       deviceConfig.setupComplete &&
@@ -277,10 +291,11 @@ void applyPendingMinisConfig() {
       deviceConfig.remoteBindHost == managed.remoteBindHost &&
       deviceConfig.remoteBindPort == managed.remoteBindPort &&
       deviceConfig.localHost == managed.localHost &&
-      deviceConfig.localPort == managed.localPort;
+      deviceConfig.localPort == managed.localPort &&
+      deviceConfig.macVendor == managedMacVendor;
 
   if (unchanged) {
-    LOG_I("MINIS", "cfg.txt matches stored tunnel configuration");
+    LOG_I("MINIS", "cfg.txt matches stored tunnel/MAC configuration");
     return;
   }
 
@@ -299,14 +314,16 @@ void applyPendingMinisConfig() {
   next.remoteBindPort = managed.remoteBindPort;
   next.localHost = managed.localHost;
   next.localPort = managed.localPort;
+  next.macVendor = managedMacVendor;
 
   LOGF_I("MINIS",
-         "cfg.txt changed: enabled=%s ssh=%s@%s:%u remote=%s:%u local=%s:%u",
+         "cfg.txt changed: enabled=%s ssh=%s@%s:%u remote=%s:%u local=%s:%u mac_vendor=%s",
          next.tunnelEnabled ? "yes" : "no", next.sshUsername.c_str(),
          next.sshHost.c_str(), static_cast<unsigned int>(next.sshPort),
          next.remoteBindHost.c_str(),
          static_cast<unsigned int>(next.remoteBindPort), next.localHost.c_str(),
-         static_cast<unsigned int>(next.localPort));
+         static_cast<unsigned int>(next.localPort),
+         mac_vendor::configValue(next.macVendor));
 
   if (!wifi_provisioning::saveManagedConfig(next)) {
     LOG_E("MINIS", "Unable to store changed cfg.txt; current configuration remains active");
