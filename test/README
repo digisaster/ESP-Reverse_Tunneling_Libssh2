@@ -1,11 +1,15 @@
+# Tests
 
-This directory is intended for PlatformIO Test Runner and project tests.
+This project has two test groups:
 
-Unit Testing is a software testing method by which individual units of
-source code, sets of one or more MCU program modules together with associated
-control data, usage procedures, and operating procedures, are tested to
-determine whether they are fit for use. Unit testing finds problems early
-in the development cycle.
+- `test/native/`: host-side Unity tests for configuration, channel allocation,
+  timeout handling, prepend buffers, circuit-breaker logic, and related helpers.
+- `test/integration/`: hardware-in-the-loop tests that drive a real ESP32
+  through reverse SSH tunnels using the supplied Docker test stack.
 
-More information about PlatformIO Unit Testing:
-- https://docs.platformio.org/en/latest/advanced/unit-testing/index.html
+For the hardware test setup and commands, see
+[`test/integration/README.md`](integration/README.md).
+
+The reference ESP32-C3 firmware must still be validated on real hardware after
+memory-sensitive, transport, reconnect, or provisioning changes. A successful
+compile alone is not considered runtime validation.
