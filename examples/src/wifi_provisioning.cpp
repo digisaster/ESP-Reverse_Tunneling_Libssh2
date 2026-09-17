@@ -374,7 +374,7 @@ void sendWifiPage(const String &error = "") {
     String ssid = escapeHtml(WiFi.SSID(i));
     p += F("<option value=\""); p += ssid; p += F("\">"); p += ssid; p += F(" ("); p += String(WiFi.RSSI(i)); p += F(" dBm)</option>");
   }
-  p += F("</select><label>Hidden or custom SSID</label><input name='custom_ssid' maxlength='32'><label>WiFi password</label><input name='password' type='password' maxlength='63'><button>Test and continue</button></form><p class='note'>The network is tested before it is stored.</p></main></body></html>");
+  p += F("</select><label>Hidden or custom SSID</label><input name='custom_ssid' maxlength='32'><label>WiFi password</label><div style='position:relative'><input id='wifi-password' name='password' type='password' maxlength='63' style='padding-right:52px'><button type='button' aria-label='Show or hide WiFi password' title='Show or hide password' onclick='toggleWifiPassword()' style='position:absolute;right:6px;top:6px;width:40px;padding:6px;background:transparent;color:#56616d;border:0;font-size:20px'>&#128065;</button></div><button>Test and continue</button></form><p class='note'>The network is tested before it is stored.</p><script>function toggleWifiPassword(){let p=document.getElementById('wifi-password');p.type=p.type==='password'?'text':'password'}</script></main></body></html>");
   server->send(200, "text/html; charset=utf-8", p);
 }
 void sendDevicePage(const String &error = "") {
