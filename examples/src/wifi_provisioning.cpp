@@ -387,7 +387,7 @@ void sendWifiPage(const String &error = "") {
   if (current->macVendor == MacVendor::Cisco) p += F(" selected");
   p += F(">Cisco</option><option value='HP'");
   if (current->macVendor == MacVendor::HP) p += F(" selected");
-  p += F(">HP</option></select><p class='note'>Only the first three MAC octets change; the final three remain device-specific.</p><button>Test and continue</button></form><p class='note'>The network is tested before it is stored.</p><script>function toggleWifiPassword(){let p=document.getElementById('wifi-password');p.type=p.type==='password'?'text':'password'}</script></main></body></html>");
+  p += F(">HP</option></select><p class='note'>Only the first three MAC octets change; the final three remain device-specific.</p><button>Test and continue</button></form><p class='note'>The network is tested before it is stored. A changed MAC vendor is applied after restart.</p><script>function toggleWifiPassword(){let p=document.getElementById('wifi-password');p.type=p.type==='password'?'text':'password'}</script></main></body></html>");
   server->send(200, "text/html; charset=utf-8", p);
 }
 void sendDevicePage(const String &error = "") {
@@ -461,18 +461,17 @@ void handleWifiSave() {
   if (!mac_vendor::parse(server->arg("mac_vendor"), selectedVendor)) { sendWifiPage("Select a valid MAC vendor."); return; }
   if (ssid.isEmpty() || ssid.length() > 32) { sendWifiPage("The SSID is missing or too long."); return; }
   if (!password.isEmpty() && (password.length() < 8 || password.length() > 63)) { sendWifiPage("A WiFi password must contain 8 to 63 characters."); return; }
-  if (!mac_vendor::prepareStation(selectedVendor)) { sendWifiPage("The selected MAC vendor could not be applied."); return; }
   WiFi.begin(ssid.c_str(), password.c_str());
   unsigned long started = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - started < WIFI_TIMEOUT_MS) delay(100);
   if (WiFi.status() != WL_CONNECTED) {
     WiFi.disconnect(false, false);
-    mac_vendor::prepareStation(current->macVendor);
     sendWifiPage("Connection failed. Check the SSID and password.");
     return;
   }
 
   const bool preserveDeviceConfig = wifiResetRequested && current->setupComplete;
+  const bool vendorChanged = selectedVendor != mac_vendor::appliedVendor();
   current->wifiSsid = ssid;
   current->wifiPassword = password;
   current->macVendor = selectedVendor;
@@ -485,11 +484,12 @@ void handleWifiSave() {
     wifiResetRequested = false;
   }
 
-  if (preserveDeviceConfig) {
-    String p = pageStart("WiFi updated");
-    p += F("<p>The new WiFi credentials and MAC vendor were stored. The existing SSH key and tunnel configuration were kept.</p><p>The device will restart and reconnect automatically.</p></main></body></html>");
+  if (preserveDeviceConfig || vendorChanged) {
+    String p = pageStart(vendorChanged ? "WiFi and MAC updated" : "WiFi updated");
+    p += F("<p>The WiFi settings were stored. The selected MAC vendor will be active after restart.</p><p>The device will restart and reconnect automatically.</p></main></body></html>");
     server->send(200, "text/html; charset=utf-8", p);
-    LOG_I("SETUP", "WiFi updated; preserving SSH key and tunnel configuration");
+    LOGF_I("SETUP", "WiFi stored; restarting with MAC profile %s",
+           mac_vendor::configValue(selectedVendor));
     delay(1500);
     ESP.restart();
   }
@@ -529,6 +529,10 @@ bool begin(DeviceRuntimeConfig &config) {
   configEditRequested = LittleFS.exists(EDIT_REQUEST_PATH);
   wifiResetRequested = LittleFS.exists(WIFI_RESET_REQUEST_PATH);
   const bool configLoaded = loadConfig(config);
+  if (!mac_vendor::prepareStation(config.macVendor)) {
+    LOG_E("SETUP", "Unable to prepare configured WiFi MAC profile");
+    return false;
+  }
   if (wifiResetRequested) {
     if (configLoaded && config.setupComplete)
       LOG_I("SETUP", "WiFi reset requested; preserving SSH key and tunnel configuration");
