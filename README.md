@@ -37,9 +37,24 @@ temporary, open `esp32tun-XXXXXX` access point. It normally launches the setup
 page automatically through a captive portal. The serial monitor also prints
 `http://192.168.4.1` as a fallback.
 
+The WiFi page scans for networks, accepts an SSID/password, provides an eye
+button to show or hide the password, and lets the operator choose the WiFi MAC
+vendor profile:
+
+- `Original ESP32`
+- `Cisco`
+- `HP`
+
+The selected vendor profile changes only the first three MAC octets; the final
+three remain device-specific. A changed MAC vendor is stored and applied on the
+next restart rather than being changed live while WiFi is active.
+
 Select a network and choose **Test and continue**. After WiFi is verified, the
 open setup network closes. Reconnect to the selected network and follow the
-displayed link to the temporary tunnel setup page.
+displayed link to the temporary tunnel setup page. When a changed MAC profile
+requires a restart, the device stores the WiFi settings first, restarts, applies
+the selected MAC before WiFi initialization, and reconnects through the normal
+boot path.
 
 The second page configures the SSH server, username, password or private key,
 an optional matching public key, and one reverse-tunnel mapping. ECDSA keys
@@ -51,20 +66,21 @@ Passwords and the optional private/public key pair are stored as plain text in
 LittleFS. Treat physical flash access as credential access. SSH credentials are
 entered only after the device has joined the trusted WiFi network.
 
-### Reopen configuration
+### BOOT button actions
 
-To edit an existing tunnel configuration, press the board's **BOOT** button
-three times within two seconds. The ESP32 restarts, reconnects to the stored
-WiFi network, and opens the tunnel setup page at the IP address printed in the
-serial monitor. Existing values are filled in; stored passwords and private
-and public keys remain hidden and are retained when their fields are left
-empty. This edit path requires the stored WiFi network to remain reachable.
+The reference firmware uses the BOOT button as follows:
 
-For a complete reset, or recovery when the stored WiFi is no longer usable,
-leave the firmware running and hold **BOOT** for four seconds. Do not press
-RESET. This removes `/esp32tun.cfg`, the stored SSH key pair, and restarts the
-open first-boot portal. These actions are enabled on GPIO 0 for the LOLIN S2
-Mini and GPIO 9 for the ESP32-C3 reference target.
+- **3 short clicks:** WiFi-only reset. WiFi credentials are cleared and the
+  first WiFi portal reopens, while the SSH key pair, tunnel configuration,
+  Minis configuration, and selected MAC vendor are preserved.
+- **Hold for 4 seconds:** reopen the stored tunnel configuration after a
+  restart. WiFi credentials and the selected MAC vendor remain unchanged.
+- **5 short clicks:** full factory reset. Stored device configuration, SSH keys,
+  Minis configuration, and WiFi credentials are removed. The next setup uses
+  `ORIGINAL` as the default MAC profile.
+
+These actions are enabled on GPIO 0 for the LOLIN S2 Mini and GPIO 9 for the
+ESP32-C3 reference target.
 
 ## Build, flash, and monitor
 
@@ -136,10 +152,11 @@ If automatic bootloader entry fails on an ESP32-S2:
 
 The hardware-validated `esp32_c3_lowmem` environment targets an ESP32-C3
 DevKitM-1 compatible board without PSRAM. It intentionally allows one listener
-and one active forwarded channel, uses a 2 KB transport buffer, 8 KB per tunnel
-direction, and a 2 KB prepend capacity per directional ring. Native USB CDC is
-enabled for boards that expose the ESP32-C3 USB-Serial/JTAG interface directly.
-The remote listener port is selected explicitly on the tunnel setup page.
+and one active forwarded channel, uses a 2 KB shared transport work buffer,
+8 KB per tunnel direction, and a 2 KB prepend capacity per directional ring.
+Native USB CDC is enabled for boards that expose the ESP32-C3 USB-Serial/JTAG
+interface directly. The remote listener port is selected explicitly on the
+tunnel setup page.
 
 ```powershell
 pio run -e esp32_c3_lowmem
@@ -159,6 +176,7 @@ Replace `COM9` with the detected port. Validation on the tested C3 covered:
    key, followed by reverse-listener creation.
 7. Minis bootstrap, public-key upload, SID-based SSH login, periodic managed
    `cfg.txt` retrieval, and persisted configuration applied after reboot.
+8. One-time Genesis inventory upload keyed to the SSH public-key tag.
 
 The tested profile is suitable as the ESP32-C3 reference configuration.
 Boards with a different flash layout or USB implementation may still need a
@@ -196,8 +214,14 @@ then closes the connection.
 
 A complete configuration can enable or disable the tunnel and set `SSH_HOST`,
 `SSH_PORT`, `REMOTE_BIND_HOST`, `REMOTE_BIND_PORT`, `LOCAL_HOST`, and
-`LOCAL_PORT`. The SSH username is always the lowercase eight-character SID; no
-`SSH_USER` field is accepted.
+`LOCAL_PORT`. The optional `MAC_VENDOR` field can be `ORIGINAL`, `CISCO`, or
+`HP`. If it is omitted, the locally stored MAC profile is preserved. The SSH
+username is always the lowercase eight-character SID; no `SSH_USER` field is
+accepted.
+
+A changed `MAC_VENDOR` follows the same persist-and-restart policy as tunnel
+changes. The new vendor prefix is applied before WiFi initialization during the
+next boot; there is no live MAC replacement.
 
 The **private key and passphrase remain local on the ESP32** and are never
 uploaded to or downloaded from Minis. When a matching public key is configured,
@@ -216,8 +240,8 @@ similar to:
 ```
 
 A valid managed config is compared with the settings currently stored on the
-device. When the tunnel settings are unchanged, no action is taken. When they
-change, the firmware stores the new `/esp32tun.cfg` and restarts. The new tunnel
+device. When the managed settings are unchanged, no action is taken. When they
+change, the firmware stores the new `/esp32tun.cfg` and restarts. The new
 configuration is applied through the normal boot path. There is no live tunnel
 replacement or rollback state machine.
 
@@ -228,10 +252,7 @@ are left untouched.
 The ESP32-C3 control-plane TLS guard currently requires at least 70 KiB total
 free heap and a largest free block of at least 31 KiB before starting a Minis
 TLS connection. This protects SSH from known low-memory conditions, but it is a
-safety guard rather than a guarantee of TLS success. The latest measured
-active-channel state with the 2 KB buffer profile is around 72-73 KB free; a TLS
-attempt at about 72.8 KB still failed cleanly from memory pressure while the SSH
-channel remained connected with zero dropped bytes. See
+safety guard rather than a guarantee of TLS success. See
 [ESP32-C3 memory and stability notes](docs/ESP32_C3_MEMORY_NOTES.md) for the
 measured details.
 
@@ -240,6 +261,25 @@ Heartbeat/config scheduling retains randomized jitter: the configured
 same base interval is added. This spreads device requests between one and two
 times the configured base interval.
 
+### Genesis inventory
+
+The firmware uploads a one-time `genesis.txt` inventory report through the
+existing Minis upload endpoint. The local marker is keyed to the SSH public-key
+diagnostic tag, so normal reboots, WiFi changes, and MAC-vendor changes do not
+create duplicate Genesis files.
+
+New Genesis reports record both the factory identity and the active WiFi MAC:
+
+```text
+Hardware-MAC: AC:EB:E6:48:F9:C8
+WiFi-MAC: 00:00:0C:48:F9:C8
+MAC-Vendor: CISCO
+```
+
+The SID remains derived from `ESP.getEfuseMac()` and therefore does not change
+when the WiFi MAC vendor changes. Existing Genesis files are not rewritten.
+After a full factory reset, a new SSH identity produces a new Genesis report.
+
 The current Minis HTTPS transport still uses `setInsecure()`: traffic is
 encrypted, but the server certificate is not authenticated. No private SSH key
 is sent through this channel. TLS certificate validation is required before
@@ -247,7 +287,8 @@ production deployment. SSH host-key verification is also currently disabled
 and remains a separate production-hardening task.
 
 See the [example guide](examples/README.md) for the complete `cfg.txt` format
-and runtime flow.
+and runtime flow, and [WiFi MAC vendor profiles](docs/WIFI_MAC_VENDOR.md) for
+MAC-selection details.
 
 ## Status LED
 
@@ -303,8 +344,9 @@ ssh -p 23181 local-device-user@127.0.0.1
 
 Wait for `Tunnel State: Connected` before opening the forwarded connection.
 After a hard ESP32 reset, sshd may temporarily retain the old listener. For a
-bastion, `ClientAliveInterval 15` and `ClientAliveCountMax 2` are recommended
-to reap stale sessions promptly.
+bastion, `ClientAliveInterval 15` and `ClientAliveCountMax 2` can be used to
+reap stale sessions more promptly; the client normally recovers through its
+existing retry path once the old listener is released.
 
 ## Library usage
 
@@ -366,6 +408,7 @@ hardware.
 
 - [Example guide](examples/README.md)
 - [Technical documentation](docs/README.md)
+- [WiFi MAC vendor profiles](docs/WIFI_MAC_VENDOR.md)
 - [ESP32-C3 memory and stability notes](docs/ESP32_C3_MEMORY_NOTES.md)
 - [SSH key authentication](docs/SSH_KEYS_MEMORY.md)
 - [Host-key verification](docs/HOST_KEY_VERIFICATION.md)
