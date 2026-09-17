@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 2026-09-15
+## [Unreleased] — 2026-09-17
 
 This is the candidate baseline for `esp32tun` reference firmware
 `1.0.0-beta.1`. The Arduino library retains its existing 2.x version line.
@@ -18,12 +18,19 @@ This is the candidate baseline for `esp32tun` reference firmware
 - First-boot WiFi provisioning for the reference firmware. A temporary setup
   access point scans for networks, verifies the supplied credentials, writes
   `/esp32tun.cfg`, and restarts without activating the setup server again.
+- The WiFi password field now has a visibility toggle in the captive portal.
+- WiFi MAC-vendor profiles were added to the reference firmware. The operator
+  can keep the original ESP32 MAC prefix or select Cisco (`00:00:0C`) or HP
+  (`3C:D9:2B`). Only the first three octets are replaced; the final three remain
+  device-specific.
+- `MAC_VENDOR=ORIGINAL|CISCO|HP` is accepted as an optional Minis-managed
+  setting. When omitted, the locally stored MAC profile is preserved.
+- New Genesis reports include the factory hardware MAC, active WiFi MAC, and
+  selected MAC-vendor profile. Genesis remains one-time per SSH key identity.
 - Two-phase provisioning now configures password or private-key SSH
   authentication and one reverse tunnel without editing source files.
 - The tunnel setup page can store a matching OpenSSH public-key line. This is
   required for ECDSA authentication and remains optional for RSA-PEM keys.
-- Holding the board's BOOT button for four seconds during normal operation
-  clears the stored provisioning data and restarts the setup portal.
 - Dedicated native regression coverage for configured channel inactivity,
   disabled timeouts, and `millis()` wraparound.
 - Initial `esp32_c3_lowmem` build profile for a single reverse listener and
@@ -32,55 +39,54 @@ This is the candidate baseline for `esp32tun` reference firmware
   single tunnel. The lowercase SID is used as SSH username while the existing
   device-local key pair is retained.
 - A total-free-heap guard was added to the Minis HTTPS path. On ESP32-C3 the
-  control plane now requires at least 70 KiB total free heap and a largest free
+  control plane requires at least 70 KiB total free heap and a largest free
   block of at least 31 KiB before attempting TLS.
+- One-time ESP32 Genesis inventory upload matching the Minis upload model.
 
 ### Changed
 
-- Managed Minis configuration now follows a simpler persist-and-restart model.
-  A valid changed `cfg.txt` is written to `/esp32tun.cfg` and the device
-  restarts; the new tunnel settings are applied through the normal boot path.
-  The previous live reconfiguration, rollback, and control-plane SSH
-  pause/resume logic has been removed.
-- Periodic Minis heartbeat and config retrieval are now one request:
-  `GET /hb/<sid>/cfg.txt`. The separate `HEAD /ping` transaction was removed,
-  eliminating a second TLS handshake per cycle.
-- The ESP32-C3 low-memory transport buffer was reduced from 4 KB to 2 KB and
-  the per-ring prepend capacity from 4 KB to 2 KB. The proven 8 KB directional
-  channel rings remain unchanged.
-- The Minis cache now stores only `HB_INTERVAL_MIN`; tunnel settings remain in
-  the device runtime configuration file.
+- BOOT-button behaviour is now explicit and non-destructive by default:
+  3 short clicks reset WiFi only, holding BOOT for 4 seconds reopens the stored
+  tunnel configuration, and 5 short clicks perform a full factory reset.
+- Managed Minis configuration follows a persist-and-restart model. A valid
+  changed `cfg.txt` is written to `/esp32tun.cfg` and the device restarts; the
+  new tunnel and MAC-vendor settings are applied through the normal boot path.
+- MAC-vendor changes are applied before WiFi initialization and are never
+  switched live while the WiFi interface is active.
+- Device configuration format is now version 4 and stores `mac_vendor`.
+  Versions 1 through 3 remain readable and default to `ORIGINAL`.
+- Periodic Minis heartbeat and config retrieval are one request:
+  `GET /hb/<sid>/cfg.txt`. The separate `HEAD /ping` transaction was removed.
+- The ESP32-C3 low-memory transport buffer was reduced from 4 KB to a shared
+  2 KB work buffer and the per-ring prepend capacity to 2 KB. The proven 8 KB
+  directional channel rings remain unchanged.
+- The Minis cache stores only `HB_INTERVAL_MIN`; tunnel and MAC-vendor settings
+  remain in the device runtime configuration file.
 
 ### Fixed
 
 - Fixed three defects in the pinned `libssh2_esp` RSA path: a one-byte public
   key buffer overflow, a missing RSA-context initialization, and an
-  uninitialized public-key derivation result. The last defect returned a local
-  authentication error before the public key was sent to the SSH server.
-- Configure SSH keepalive only after successful authentication. This prevents
-  a pre-authentication global request (`type 80`) from obscuring key failures
-  in server logs.
+  uninitialized public-key derivation result.
+- Configure SSH keepalive only after successful authentication.
+- Changed libssh2 keepalive to `want_reply=0`, removing the measured reply-path
+  heap leak while retaining periodic keepalive traffic.
 - PlatformIO consumer projects now run the pinned dependency's RSA
-  compatibility patch through `library.json`; previously it ran only for
-  repository-root builds.
+  compatibility patch through `library.json`.
 - The root PlatformIO project no longer compiles `examples/src/main.cpp`
-  twice. `pio run -e lolin_s2_mini` now builds and links directly.
+  twice.
 - `setBufferConfig(..., channelTimeout, ...)` now stores and applies the
-  configured timeout in both transport and channel-slot recycling. Previously,
-  both paths hard-coded 30 seconds and ignored the public API argument.
-- The ring-buffer prepend capacity can now be reduced at build time using
+  configured timeout in both transport and channel-slot recycling.
+- The ring-buffer prepend capacity can be reduced at build time using
   `SSH_TUNNEL_PREPEND_CAPACITY`; the default remains 8 KB for compatibility.
-- Tunnel byte counters now remain cumulative when channel slots close or are
-  reused, and `Bytes Dropped` reports actual discarded buffered payload.
+- Tunnel byte counters remain cumulative when channel slots close or are reused,
+  and `Bytes Dropped` reports actual discarded buffered payload.
 - Repeated partial writes preserve FIFO order when prepend data is already
-  pending; the transport no longer performs a read-and-discard fallback on a
-  live SSH channel.
-- Heap warnings now account for the requested allocation and a small operating
+  pending.
+- Heap warnings account for the requested allocation and a small operating
   reserve instead of treating every healthy sub-50-KB ESP32-C3 heap as low.
-- Public-key failures now report actionable key-pair and `authorized_keys`
-  checks instead of always suggesting an OpenSSH-to-PEM conversion.
-- Optional LittleFS cleanup now checks for temporary files before removing
-  them, avoiding misleading `vfs_api.cpp` errors during successful updates.
+- Public-key failures report actionable key-pair and `authorized_keys` checks.
+- Optional LittleFS cleanup checks for temporary files before removing them.
 
 ### Validated
 
@@ -94,30 +100,27 @@ This is the candidate baseline for `esp32tun` reference firmware
 - ESP32-C3 hardware testing confirmed unencrypted RSA-PEM private-key
   authentication and reverse-listener creation.
 - ESP32-C3 hardware testing confirmed ECDSA P-256 authentication using an
-  EC-PEM private key and matching OpenSSH public-key line. Ed25519 client keys
-  remain unsupported by the pinned mbedTLS backend; ECDSA P-384 and P-521 have
-  not yet been hardware-tested.
+  EC-PEM private key and matching OpenSSH public-key line.
 - Minis-managed settings survived hardware reset, authenticated directly as
   the lowercase SID, recreated the reverse listener, and forwarded an
   interactive channel with zero dropped bytes.
-- The 2 KB transport/prepend profile increased measured active-channel free
-  heap from roughly 64-65 KB to roughly 72-73 KB while keeping the 8 KB
-  directional rings and zero dropped bytes.
-- A Minis TLS attempt at approximately 72.8 KB total free heap still failed
-  cleanly from memory pressure; the SSH session and active forwarded channel
-  remained connected with zero dropped bytes. This confirms the control-plane
-  guard is a safety threshold rather than a TLS-success guarantee.
+- The 2 KB shared transport/prepend profile reached roughly 2.5 Mbit/s in a
+  10 MB transfer test with zero dropped bytes.
+- Heartbeat/config HTTPS requests and an idle SSH tunnel operate concurrently;
+  under active-channel memory pressure the TLS guard defers the control-plane
+  request and leaves SSH untouched.
+- Genesis upload was verified once per SSH key tag; a normal reboot reported
+  `Genesis already recorded` and did not create a duplicate file.
 
 ### Documentation
 
-- Updated the ESP32-C3 memory notes to the current 2 KB buffer profile,
-  70 KiB total-free guard, combined heartbeat/config request, and
-  persist-and-restart managed configuration flow.
-- Removed stale documentation claims about live managed activation, rollback,
-  separate periodic ping requests, and obsolete control-plane pause/recovery.
-- Added a one-command Windows ESP32-C3 build check that rejects stale
-  `C:\pio` installations and automatically repairs the known nested-toolchain
-  layout used by the failing workstation.
+- Updated the root README, example guide, and technical documentation index to
+  the current BOOT-button behaviour, shared 2 KB transport buffer, one-request
+  heartbeat/config model, Genesis flow, and MAC-vendor support.
+- Added `docs/WIFI_MAC_VENDOR.md` covering local and Minis configuration,
+  reboot semantics, SID stability, Genesis fields, and operational caveats.
+- Removed stale documentation claims about the older BOOT/reset mapping and
+  separate periodic ping requests.
 
 ## [2.2.0] — 2026-04-30 — Stabilization
 
