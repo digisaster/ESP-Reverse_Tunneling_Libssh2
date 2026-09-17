@@ -21,19 +21,25 @@ constexpr char KEY_TEMP[] = "/esp32tun_ssh_key.tmp";
 constexpr char PUBLIC_KEY_PATH[] = "/esp32tun_ssh_key.pub";
 constexpr char PUBLIC_KEY_TEMP[] = "/esp32tun_ssh_key.pub.tmp";
 constexpr char EDIT_REQUEST_PATH[] = "/esp32tun.edit";
+constexpr char WIFI_RESET_REQUEST_PATH[] = "/esp32tun.wifi_reset";
 constexpr char MINIS_CONFIG_PATH[] = "/minis.cfg";
 constexpr char MINIS_CONFIG_TEMP_PATH[] = "/minis.cfg.tmp";
 constexpr char MINIS_CONFIG_BACKUP_PATH[] = "/minis.cfg.bak";
 constexpr unsigned long WIFI_TIMEOUT_MS = 20000;
 constexpr size_t MAX_KEY_SIZE = 16384;
 constexpr size_t MAX_PUBLIC_KEY_SIZE = 4096;
-constexpr unsigned long CONFIG_RESET_HOLD_MS = 4000;
+constexpr unsigned long CONFIG_EDIT_HOLD_MS = 4000;
 constexpr unsigned long CONFIG_CLICK_MIN_MS = 40;
-constexpr unsigned long CONFIG_CLICK_WINDOW_MS = 2000;
+constexpr unsigned long CONFIG_CLICK_WINDOW_MS = 3000;
 constexpr TickType_t CONFIG_BUTTON_SAMPLE_TICKS = pdMS_TO_TICKS(20);
 
 enum class PortalMode { None, Wifi, Device };
-enum class ButtonAction : uint8_t { None = 0, Edit = 1, FactoryReset = 2 };
+enum class ButtonAction : uint8_t {
+  None = 0,
+  WifiReset = 1,
+  Edit = 2,
+  FactoryReset = 3
+};
 WebServer *server = nullptr;
 DNSServer *dns = nullptr;
 DeviceRuntimeConfig *current = nullptr;
@@ -49,6 +55,7 @@ volatile ButtonAction pendingButtonAction = ButtonAction::None;
 TaskHandle_t buttonTaskHandle = nullptr;
 bool buttonTaskStarted = false;
 bool configEditRequested = false;
+bool wifiResetRequested = false;
 
 void sampleConfigButton() {
 #if ESP32TUN_CONFIG_BUTTON_PIN >= 0
@@ -66,20 +73,25 @@ void sampleConfigButton() {
 
       if (!buttonHoldActionTriggered &&
           pressDuration >= CONFIG_CLICK_MIN_MS &&
-          pressDuration < CONFIG_RESET_HOLD_MS) {
+          pressDuration < CONFIG_EDIT_HOLD_MS) {
         if (buttonClickCount > 0 &&
             now - buttonClickWindowStartedAt > CONFIG_CLICK_WINDOW_MS)
           buttonClickCount = 0;
         if (buttonClickCount == 0)
           buttonClickWindowStartedAt = now;
         ++buttonClickCount;
-        if (buttonClickCount >= 3)
-          pendingButtonAction = ButtonAction::Edit;
+        if (buttonClickCount >= 5) {
+          buttonClickCount = 5;
+          pendingButtonAction = ButtonAction::FactoryReset;
+        }
       }
       buttonHoldActionTriggered = false;
     } else if (buttonClickCount > 0 &&
                now - buttonClickWindowStartedAt > CONFIG_CLICK_WINDOW_MS) {
-      buttonClickCount = 0;
+      if (buttonClickCount == 3)
+        pendingButtonAction = ButtonAction::WifiReset;
+      else
+        buttonClickCount = 0;
     }
     return;
   }
@@ -92,10 +104,10 @@ void sampleConfigButton() {
   }
 
   if (!buttonHoldActionTriggered &&
-      now - buttonPressedAt >= CONFIG_RESET_HOLD_MS) {
+      now - buttonPressedAt >= CONFIG_EDIT_HOLD_MS) {
     buttonHoldActionTriggered = true;
     buttonClickCount = 0;
-    pendingButtonAction = ButtonAction::FactoryReset;
+    pendingButtonAction = ButtonAction::Edit;
   }
 #endif
 }
@@ -438,8 +450,28 @@ void handleWifiSave() {
   unsigned long started = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - started < WIFI_TIMEOUT_MS) delay(100);
   if (WiFi.status() != WL_CONNECTED) { WiFi.disconnect(false, false); sendWifiPage("Connection failed. Check the SSID and password."); return; }
-  current->wifiSsid = ssid; current->wifiPassword = password; current->setupComplete = false;
+
+  const bool preserveDeviceConfig = wifiResetRequested && current->setupComplete;
+  current->wifiSsid = ssid;
+  current->wifiPassword = password;
+  if (!preserveDeviceConfig)
+    current->setupComplete = false;
   if (!writeConfig(*current)) { sendWifiPage("WiFi worked, but the configuration could not be stored."); return; }
+
+  if (wifiResetRequested) {
+    removeIfExists(WIFI_RESET_REQUEST_PATH);
+    wifiResetRequested = false;
+  }
+
+  if (preserveDeviceConfig) {
+    String p = pageStart("WiFi updated");
+    p += F("<p>The new WiFi credentials were stored. The existing SSH key and tunnel configuration were kept.</p><p>The device will restart and reconnect automatically.</p></main></body></html>");
+    server->send(200, "text/html; charset=utf-8", p);
+    LOG_I("SETUP", "WiFi updated; preserving SSH key and tunnel configuration");
+    delay(1500);
+    ESP.restart();
+  }
+
   String url = String("http://") + WiFi.localIP().toString() + "/";
   String p = pageStart("WiFi connected");
   p += F("<p>Reconnect to the selected WiFi network, then open:</p><p><a href='"); p += url; p += F("'>"); p += url;
@@ -470,10 +502,19 @@ bool begin(DeviceRuntimeConfig &config) {
     LOG_I("SETUP", "BOOT monitor task started");
   else
     LOG_W("SETUP", "BOOT monitor task unavailable; using loop polling fallback");
-  LOG_I("SETUP", "Press BOOT 3 times to edit, or hold 4 seconds to reset");
+  LOG_I("SETUP", "BOOT: 3 clicks=WiFi reset, 5 clicks=factory reset, hold 4s=edit");
 #endif
   configEditRequested = LittleFS.exists(EDIT_REQUEST_PATH);
-  if (loadConfig(config)) return true;
+  wifiResetRequested = LittleFS.exists(WIFI_RESET_REQUEST_PATH);
+  const bool configLoaded = loadConfig(config);
+  if (wifiResetRequested) {
+    if (configLoaded && config.setupComplete)
+      LOG_I("SETUP", "WiFi reset requested; preserving SSH key and tunnel configuration");
+    else
+      LOG_W("SETUP", "WiFi reset requested without complete stored tunnel configuration");
+    return startWifiPortal();
+  }
+  if (configLoaded) return true;
   return startWifiPortal();
 }
 bool startDeviceSetup(DeviceRuntimeConfig &config) {
@@ -504,7 +545,7 @@ void pollConfigResetButton() {
   const uint8_t observedClicks = buttonClickCount;
   if (observedClicks != lastReportedClickCount) {
     if (observedClicks > 0)
-      LOGF_I("SETUP", "BOOT click %u/3", observedClicks);
+      LOGF_I("SETUP", "BOOT click %u/5", observedClicks);
     lastReportedClickCount = observedClicks;
   }
 
@@ -527,12 +568,40 @@ void pollConfigResetButton() {
     }
     marker.print('1');
     marker.close();
-    LOG_I("SETUP", "Opening stored configuration after restart");
+    LOG_I("SETUP", "BOOT held 4 seconds: opening stored configuration after restart");
     delay(250);
     ESP.restart();
   }
 
-  LOG_W("SETUP", "BOOT held: removing stored configuration, WiFi credentials, and restarting");
+  if (action == ButtonAction::WifiReset) {
+    File marker = LittleFS.open(WIFI_RESET_REQUEST_PATH, "w");
+    if (!marker) {
+      LOG_E("SETUP", "Unable to store WiFi reset request");
+      pendingButtonAction = ButtonAction::None;
+      buttonClickCount = 0;
+      buttonClickWindowStartedAt = 0;
+      buttonWasPressed = false;
+      buttonPressedAt = 0;
+      buttonHoldActionTriggered = false;
+      lastReportedClickCount = 0;
+      return;
+    }
+    marker.print('1');
+    marker.close();
+    removeIfExists(EDIT_REQUEST_PATH);
+    LOG_I("SETUP", "BOOT 3 clicks: clearing WiFi credentials while preserving SSH/tunnel configuration");
+    stopServices();
+    WiFi.disconnect(false, true);
+    delay(100);
+    WiFi.mode(WIFI_OFF);
+    delay(150);
+    ESP.restart();
+  }
+
+  if (action != ButtonAction::FactoryReset)
+    return;
+
+  LOG_W("SETUP", "BOOT 5 clicks: factory reset removes configuration, SSH keys, and WiFi credentials");
   stopServices();
   removeIfExists(CONFIG_PATH);
   removeIfExists(CONFIG_TEMP);
@@ -542,6 +611,7 @@ void pollConfigResetButton() {
   removeIfExists(PUBLIC_KEY_PATH);
   removeIfExists(PUBLIC_KEY_TEMP);
   removeIfExists(EDIT_REQUEST_PATH);
+  removeIfExists(WIFI_RESET_REQUEST_PATH);
   removeIfExists(MINIS_CONFIG_PATH);
   removeIfExists(MINIS_CONFIG_TEMP_PATH);
   removeIfExists(MINIS_CONFIG_BACKUP_PATH);
