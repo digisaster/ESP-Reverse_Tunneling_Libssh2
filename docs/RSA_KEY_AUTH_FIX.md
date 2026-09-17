@@ -1,100 +1,80 @@
-# RSA key authentication fix and validation
+# RSA compatibility patch
 
-## Status
+Traditional unencrypted RSA-PEM authentication is hardware-validated on the
+ESP32-C3 reference target. It depends on a compatibility patch applied to the
+pinned `libssh2_esp` mbedTLS backend.
 
-RSA private-key authentication from memory is part of the proposed
-`esp32tun` **1.0.0-beta.1** reference-firmware baseline. It was validated on
-real ESP32-C3 hardware using the `esp32_c3_lowmem` environment, an unencrypted
-traditional RSA PEM private key, and a matching `authorized_keys` entry on an
-OpenSSH server.
+This document is retained because removing or weakening that patch can
+reintroduce a known authentication regression.
 
-This result does not yet claim compatibility with every key container or key
-algorithm. RSA-PEM is the known-good baseline for subsequent tests.
+## Why the patch exists
 
-## Observed failure
+The pinned dependency required three RSA corrections:
 
-The TCP connection and SSH handshake completed, but
-`libssh2_userauth_publickey_frommemory()` returned `-1` with an unknown error.
-The server logged a disconnect during `preauth` and never logged a rejected
-public key. RSA parsing and signing diagnostics were also absent.
-
-That combination showed that authentication failed locally while libssh2 was
-deriving the public-key blob from the supplied private key, before an
-authentication request reached the server.
-
-## Root causes in the pinned dependency
-
-The project pins `libssh2_esp` 1.1. Its mbedTLS RSA path required three
-compatibility corrections:
-
-1. The RSA modulus gained an SSH `mpint` prefix byte after the output buffer
-   had been sized, causing a one-byte write beyond the allocation.
+1. The SSH `mpint` representation could require a leading prefix byte after the
+   RSA modulus output buffer had already been sized, creating a one-byte buffer
+   overflow.
 2. A parsed private key was copied into an RSA context before that context was
    initialized with `mbedtls_rsa_init()`.
-3. `_libssh2_mbedtls_pub_priv_key()` declared `int ret;` without initializing
-   it. On an otherwise successful path, `if(ret)` therefore read an undefined
-   value and could return `-1` before sending the public key. Initializing it
-   as `int ret = 0;` resolved the final reproducible failure.
+3. `_libssh2_mbedtls_pub_priv_key()` used an uninitialized `ret` value. An
+   otherwise successful public-key derivation could therefore return an error
+   before a valid authentication request reached the SSH server. The corrected
+   path initializes this value to zero.
 
-The third correction matches the current upstream libssh2 implementation,
-which initializes the result to zero.
+The third fix also matches the corresponding current upstream libssh2 behaviour.
 
-## Project implementation
+## How the project protects the fix
 
 `pio_extra/patch_libssh2_rsa.py` applies the corrections to PlatformIO's
-downloaded dependency before compilation. `library.json` registers it as the
-library's `build.extraScript`, so it also runs when this repository is installed
-through another project's `lib_deps`; consumers do not need to copy an
-`extra_scripts` setting into their own `platformio.ini`. The patcher is
-deliberately strict: it accepts the known vulnerable or corrected source forms
-and aborts the build if the pinned dependency no longer matches. This prevents
-a future dependency update from being modified silently at the wrong location.
+downloaded dependency before compilation.
 
-CI builds the standalone project and the `examples` consumer project, then
-checks the latter's downloaded `libssh2_esp` source for the corrected
-public-key result initialization. This protects the documented installation
-route rather than only the repository-root build.
+`library.json` registers the patcher as a library build extra script, so the fix
+is also applied when this repository is installed through another project's
+`lib_deps`.
 
-The patch also retains temporary, non-secret RSA diagnostics for compatibility
-testing. They report parser return codes, key type and size, and signing
-success or failure. They never print the private key, passphrase, public-key
-contents, or signature.
+The patcher deliberately checks for known source forms and should fail the build
+if a future dependency version no longer matches the expected code. Do not make
+it silently ignore an unknown dependency layout; that failure is the signal to
+review whether the patch is still required or must be adapted.
 
-Keepalive configuration was moved until after authentication. Before that
-change, OpenSSH logged a pre-authentication SSH global request as
-`dispatch_protocol_error: type 80`; this message was diagnostic noise rather
-than the key-authentication cause.
+## Validated scope
 
-## Validated result
+The following path is known to work on real ESP32-C3 hardware:
 
-The successful ESP32-C3 test established all of the following:
+```text
+traditional unencrypted RSA PEM
+    -> parse private key
+    -> derive/sign with RSA
+    -> public-key authentication
+    -> reverse listener
+    -> forwarded tunnel traffic
+```
 
-- WiFi connection and SSH handshake;
-- RSA private-key parsing and RSA context validation;
-- RSA signing from the key stored in LittleFS and loaded into memory;
-- public-key authentication without an SSH account password;
-- reverse-listener creation and usable tunnel operation.
+ECDSA P-256 uses a different validated path and requires the matching OpenSSH
+public-key line. Ed25519 client authentication is not supported by the pinned
+mbedTLS authentication backend.
 
-The reference build remained within the C3 profile limits at approximately
-12.0% RAM and 93.6% flash usage.
+See [`SSH_KEYS_MEMORY.md`](SSH_KEYS_MEMORY.md) for the current reference-firmware
+key model.
 
-## Compatibility baseline and next tests
+## Related keepalive rule
 
-| Key or container | Beta status |
-| --- | --- |
-| Unencrypted traditional RSA PEM | Hardware validated |
-| RSA PEM with passphrase | Not yet validated |
-| PKCS#8 PEM | Not yet validated |
-| OpenSSH RSA private-key container | Not yet validated |
-| ECDSA P-256 EC PEM plus matching public key | Hardware validated |
-| ECDSA P-384/P-521 | Accepted by setup; not yet hardware-tested |
-| Ed25519 client key | Not supported by the pinned mbedTLS key path |
+SSH keepalive is configured only after authentication. This ordering avoids
+mixing pre-authentication keepalive traffic with authentication diagnostics.
 
-Further key testing should proceed one variable at a time. For each case,
-record the key algorithm, key size, container, encryption/passphrase status,
-ESP diagnostic result, and corresponding OpenSSH server log. ECDSA P-256
-requires the complete matching OpenSSH public-key line because this backend
-cannot derive it from the EC private key.
+The current ESP32-C3 stability rule that keepalive uses `want_reply=0` is
+separately documented in
+[`ESP32_C3_MEMORY_NOTES.md`](ESP32_C3_MEMORY_NOTES.md).
+
+## Maintenance rule
+
+When updating `libssh2_esp` or changing the mbedTLS backend:
+
+1. inspect whether all three patched conditions still exist;
+2. adapt or remove the patch only with source-level evidence;
+3. rebuild both the repository and a consuming `lib_deps` project;
+4. hardware-test RSA authentication through reverse-listener creation and real
+   forwarded traffic.
 
 Do not commit test private keys, passphrases, provisioned LittleFS images, or
-serial logs containing infrastructure credentials.
+credentials in diagnostic logs.
