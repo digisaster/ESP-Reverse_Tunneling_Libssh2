@@ -28,6 +28,7 @@ constexpr uint32_t INITIAL_CONFIG_DELAY_MS = 5000;
 constexpr uint32_t HEARTBEAT_TASK_STACK_BYTES = 6144;
 constexpr size_t CONFIG_BUFFER_SIZE = 768;
 constexpr size_t MAX_CONFIG_HOST_LENGTH = 253;
+constexpr size_t MAX_MAC_VENDOR_LENGTH = 16;
 constexpr size_t MINIS_TLS_MIN_LARGEST_BLOCK = 31 * 1024;
 constexpr size_t MINIS_TLS_MIN_FREE_HEAP = 70 * 1024;
 constexpr const char *CACHED_CONFIG_PATH = "/minis.cfg";
@@ -43,9 +44,11 @@ struct QueuedManagedConfig {
   uint16_t sshPort;
   uint16_t remoteBindPort;
   uint16_t localPort;
+  bool macVendorPresent;
   char sshHost[MAX_CONFIG_HOST_LENGTH + 1];
   char remoteBindHost[MAX_CONFIG_HOST_LENGTH + 1];
   char localHost[MAX_CONFIG_HOST_LENGTH + 1];
+  char macVendor[MAX_MAC_VENDOR_LENGTH + 1];
 };
 
 enum class SettingResult { NotFound, Valid, Invalid };
@@ -75,6 +78,9 @@ struct ParsedConfig {
   bool localPortPresent = false;
   bool localPortValid = false;
   uint16_t localPort = 0;
+  bool macVendorPresent = false;
+  bool macVendorValid = false;
+  const char *macVendor = nullptr;
 };
 
 void removeIfExists(const char *path) {
@@ -359,6 +365,13 @@ bool isValidConfigHost(const char *host) {
   return true;
 }
 
+bool isValidMacVendor(const char *vendor) {
+  return equalsIgnoreCase(vendor, "ORIGINAL") ||
+         equalsIgnoreCase(vendor, "ESP32") ||
+         equalsIgnoreCase(vendor, "CISCO") ||
+         equalsIgnoreCase(vendor, "HP");
+}
+
 bool parseConfig(char *config, ParsedConfig &parsed) {
   char *line = config;
   bool structurallyValid = true;
@@ -465,6 +478,18 @@ bool parseConfig(char *config, ParsedConfig &parsed) {
         if (parsed.localPortValid)
           parsed.localPort = static_cast<uint16_t>(value);
       }
+
+      textValue = nullptr;
+      result = parseTextSetting(line, "MAC_VENDOR", textValue);
+      if (result != SettingResult::NotFound) {
+        if (parsed.macVendorPresent)
+          structurallyValid = false;
+        parsed.macVendorPresent = true;
+        parsed.macVendorValid =
+            result == SettingResult::Valid && isValidMacVendor(textValue);
+        if (parsed.macVendorValid)
+          parsed.macVendor = textValue;
+      }
     }
     if (nextLine == nullptr)
       break;
@@ -480,7 +505,8 @@ bool hasCompleteTunnelConfig(const ParsedConfig &parsed) {
          parsed.localPortPresent && parsed.tunnelEnabledValid &&
          parsed.sshHostValid && parsed.sshPortValid &&
          parsed.remoteBindHostValid && parsed.remoteBindPortValid &&
-         parsed.localHostValid && parsed.localPortValid;
+         parsed.localHostValid && parsed.localPortValid &&
+         (!parsed.macVendorPresent || parsed.macVendorValid);
 }
 
 bool writeCachedHeartbeatInterval(uint16_t intervalMin) {
@@ -552,10 +578,13 @@ bool queueManagedConfig(const ParsedConfig &parsed) {
   queued.sshPort = parsed.sshPort;
   queued.remoteBindPort = parsed.remoteBindPort;
   queued.localPort = parsed.localPort;
+  queued.macVendorPresent = parsed.macVendorPresent;
   strlcpy(queued.sshHost, parsed.sshHost, sizeof(queued.sshHost));
   strlcpy(queued.remoteBindHost, parsed.remoteBindHost,
           sizeof(queued.remoteBindHost));
   strlcpy(queued.localHost, parsed.localHost, sizeof(queued.localHost));
+  if (parsed.macVendorPresent)
+    strlcpy(queued.macVendor, parsed.macVendor, sizeof(queued.macVendor));
   return xQueueOverwrite(managedConfigQueue, &queued) == pdPASS;
 }
 
@@ -677,6 +706,9 @@ bool takeManagedTunnelConfig(ManagedTunnelConfig &config) {
   config.remoteBindPort = queued.remoteBindPort;
   config.localHost = queued.localHost;
   config.localPort = queued.localPort;
+  config.macVendorPresent = queued.macVendorPresent;
+  if (queued.macVendorPresent)
+    config.macVendor = queued.macVendor;
   return true;
 }
 
