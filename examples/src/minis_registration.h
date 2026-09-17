@@ -12,6 +12,8 @@ struct ManagedTunnelConfig {
   uint16_t remoteBindPort = 0;
   String localHost;
   uint16_t localPort = 0;
+  bool macVendorPresent = false;
+  String macVendor;
 };
 
 // Returns a stable Minis-compatible SID consisting of 8 lowercase hex chars.
@@ -27,9 +29,8 @@ bool registerClient();
 // does not have enough free/contiguous heap.
 bool startHeartbeatTask();
 
-// Returns the latest complete tunnel config received from Minis. The main task
-// persists changed settings and restarts the device; the background task never
-// manipulates the SSH session directly.
+// Returns the latest complete tunnel config received from Minis. MAC_VENDOR is
+// optional; absent means keep the locally selected WiFi MAC profile.
 bool takeManagedTunnelConfig(ManagedTunnelConfig &config);
 
 } // namespace minis_registration
