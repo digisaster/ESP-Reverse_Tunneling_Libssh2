@@ -1,162 +1,33 @@
 # ESP-Reverse_Tunneling_Libssh2
 
-Arduino library for creating reverse SSH tunnels from an ESP32 with libssh2.
+Arduino/ESP32 library and reference firmware for a persistent reverse SSH
+tunnel built on libssh2.
 
-**Release status:** the no-code `esp32tun` reference firmware is a
-**1.0.0-beta.1 candidate**. WiFi provisioning, tunnel provisioning, password
-authentication, and RSA-PEM private-key authentication have been validated on
-the ESP32-C3 low-memory target. ECDSA P-256 authentication is also validated
-when both the EC-PEM private key and matching OpenSSH public-key line are
-provided. Ed25519 client keys and host-key verification are not part of this
-beta baseline.
+The primary reference target is `esp32_c3_lowmem`: an ESP32-C3 without PSRAM,
+configured for one reverse listener and one active forwarded channel. The
+`lolin_s2_mini` environment remains available as a second hardware profile.
 
-The current reference target is a WEMOS LOLIN S2 Mini. It has been tested with
-Wi-Fi, password authentication, a reverse SSH listener, an interactive SSH
-channel, automatic reconnection, and a 45-minute uninterrupted idle session.
-The ESP32-C3 low-memory target additionally has a validated Minis-managed
-configuration and public-key registration flow.
+## Current ESP32-C3 baseline
 
-## Installation
+The validated low-memory profile uses:
 
-Add the library to a PlatformIO project:
-
-```ini
-lib_deps =
-  https://github.com/digisaster/ESP-Reverse_Tunneling_Libssh2.git
+```text
+shared transport work buffer: 2048 bytes
+max active forwarded channels: 1
+ring buffer per direction:     8192 bytes
+prepend capacity per ring:     2048 bytes
+SSH keepalive:                 30 seconds
 ```
 
-The library manifest installs the required `libssh2_esp` dependency.
-It also applies the pinned dependency's required RSA compatibility corrections
-automatically; consuming projects do not need an `extra_scripts` setting.
+A 10 MB forwarded transfer measured roughly 2.5 Mbit/s with zero dropped bytes.
+The 8 KB directional rings and current TLS/keepalive rules are deliberate
+stability constraints; see
+[`docs/ESP32_C3_MEMORY_NOTES.md`](docs/ESP32_C3_MEMORY_NOTES.md) before changing
+memory-sensitive transport code.
 
-## First-boot WiFi setup
+## Build and flash
 
-The reference firmware no longer compiles the WiFi name and password into the
-firmware. When `/esp32tun.cfg` is absent or invalid, the ESP32 starts a
-temporary, open `esp32tun-XXXXXX` access point. It normally launches the setup
-page automatically through a captive portal. The serial monitor also prints
-`http://192.168.4.1` as a fallback.
-
-The WiFi page scans for networks, accepts an SSID/password, provides an eye
-button to show or hide the password, and lets the operator choose the WiFi MAC
-vendor profile:
-
-- `Original ESP32`
-- `Cisco`
-- `HP`
-
-The selected vendor profile changes only the first three MAC octets; the final
-three remain device-specific. A changed MAC vendor is stored and applied on the
-next restart rather than being changed live while WiFi is active.
-
-Select a network and choose **Test and continue**. After WiFi is verified, the
-open setup network closes. Reconnect to the selected network and follow the
-displayed link to the temporary tunnel setup page. When a changed MAC profile
-requires a restart, the device stores the WiFi settings first, restarts, applies
-the selected MAC before WiFi initialization, and reconnects through the normal
-boot path.
-
-The second page configures the SSH server, username, password or private key,
-an optional matching public key, and one reverse-tunnel mapping. ECDSA keys
-require the complete matching public-key line. After saving, the ESP32 restarts
-and does not create either setup server during normal operation. Existing
-WiFi-only files automatically continue with this second phase.
-
-Passwords and the optional private/public key pair are stored as plain text in
-LittleFS. Treat physical flash access as credential access. SSH credentials are
-entered only after the device has joined the trusted WiFi network.
-
-### BOOT button actions
-
-The reference firmware uses the BOOT button as follows:
-
-- **3 short clicks:** WiFi-only reset. WiFi credentials are cleared and the
-  first WiFi portal reopens, while the SSH key pair, tunnel configuration,
-  Minis configuration, and selected MAC vendor are preserved.
-- **Hold for 4 seconds:** reopen the stored tunnel configuration after a
-  restart. WiFi credentials and the selected MAC vendor remain unchanged.
-- **5 short clicks:** full factory reset. Stored device configuration, SSH keys,
-  Minis configuration, and WiFi credentials are removed. The next setup uses
-  `ORIGINAL` as the default MAC profile.
-
-These actions are enabled on GPIO 0 for the LOLIN S2 Mini and GPIO 9 for the
-ESP32-C3 reference target.
-
-## Build, flash, and monitor
-
-Run these commands from the repository root:
-
-```powershell
-pio run -e lolin_s2_mini
-pio device list
-pio run -e lolin_s2_mini --target upload --upload-port COM9
-pio device monitor -e lolin_s2_mini --port COM9 --baud 115200
-```
-
-Replace `COM9` with the port reported by `pio device list`. Close the serial
-monitor with `Ctrl+C` before flashing, otherwise the port remains busy.
-
-### Reproducible Windows/VS Code setup
-
-Use only the **PIOArduino IDE** extension. If both competing extensions are
-installed, remove the old PlatformIO extension and restart VS Code:
-
-```powershell
-code --uninstall-extension platformio.platformio-ide
-code --install-extension pioarduino.pioarduino-ide
-```
-
-Open a PowerShell terminal in the repository root. Do not use an old `C:\pio`
-executable. The repository build script locates the PIOArduino user Core at
-`%USERPROFILE%\.platformio`, repairs an incorrectly nested Windows RISC-V
-toolchain layout in both the installed package and PIOArduino's cached local
-tool source, installs a missing ESP32-C3 toolchain package when necessary, and
-performs a clean build:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\build-esp32-c3-windows.ps1 -Clean
-```
-
-Before building, the repair step also asks GCC which `libstdc++.a` it would use
-for `rv32imc_zicsr_zifencei` / `ilp32`. It stops if GCC selects the generic
-fallback library instead of the ESP32-C3-specific multilib. This check protects
-against a malformed toolchain layout that can compile and link successfully but
-produce firmware that traps with an illegal instruction at runtime.
-
-If the script reports that the C3 multilib is invalid, close running PlatformIO
-processes, remove both local copies of the RISC-V toolchain, and rerun the build
-script so PIOArduino can download a clean copy:
-
-```powershell
-Remove-Item "$env:USERPROFILE\.platformio\packages\toolchain-riscv32-esp" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item "$env:USERPROFILE\.platformio\tools\toolchain-riscv32-esp" -Recurse -Force -ErrorAction SilentlyContinue
-powershell -ExecutionPolicy Bypass -File .\tools\build-esp32-c3-windows.ps1 -Clean
-```
-
-The build script deliberately does not flash. If it cannot repair the
-environment, create a diagnostic report with:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\diagnose-platformio.ps1
-```
-
-If automatic bootloader entry fails on an ESP32-S2:
-
-1. Hold `BOOT` (or `0`).
-2. Press and release `RESET`.
-3. Release `BOOT`.
-4. Run the upload command again.
-5. Press `RESET` once after upload if the application does not start.
-
-### ESP32-C3 low-memory target
-
-The hardware-validated `esp32_c3_lowmem` environment targets an ESP32-C3
-DevKitM-1 compatible board without PSRAM. It intentionally allows one listener
-and one active forwarded channel, uses a 2 KB shared transport work buffer,
-8 KB per tunnel direction, and a 2 KB prepend capacity per directional ring.
-Native USB CDC is enabled for boards that expose the ESP32-C3 USB-Serial/JTAG
-interface directly. The remote listener port is selected explicitly on the
-tunnel setup page.
+For the ESP32-C3 reference target:
 
 ```powershell
 pio run -e esp32_c3_lowmem
@@ -165,110 +36,118 @@ pio run -e esp32_c3_lowmem --target upload --upload-port COM9
 pio device monitor -e esp32_c3_lowmem --port COM9 --baud 115200
 ```
 
-Replace `COM9` with the detected port. Validation on the tested C3 covered:
+Replace `COM9` with the detected port.
 
-1. Wi-Fi and reverse-listener establishment.
-2. An active interactive forwarded SSH channel.
-3. Repeated channel close and reopen.
-4. Thirty-second keepalive messages and idle operation.
-5. Zero dropped bytes and heap recovery after closing the channel.
-6. ECDSA P-256 authentication with an EC-PEM private key and matching public
-   key, followed by reverse-listener creation.
-7. Minis bootstrap, public-key upload, SID-based SSH login, periodic managed
-   `cfg.txt` retrieval, and persisted configuration applied after reboot.
-8. One-time Genesis inventory upload keyed to the SSH public-key tag.
+On Windows, the repository also contains a build helper that checks the known
+PIOArduino/RISC-V toolchain layout before compiling:
 
-The tested profile is suitable as the ESP32-C3 reference configuration.
-Boards with a different flash layout or USB implementation may still need a
-board-specific PlatformIO environment.
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\build-esp32-c3-windows.ps1 -Clean
+```
 
-RSA-PEM authentication was also validated on ESP32-C3 hardware. The pinned
-`libssh2_esp` dependency requires a build-time compatibility patch; its cause,
-implementation, and test evidence are recorded in
-[RSA key authentication fix](docs/RSA_KEY_AUTH_FIX.md).
+If the local PlatformIO environment itself is suspect, use:
 
-ECDSA P-256 is validated with a traditional
-`-----BEGIN EC PRIVATE KEY-----` private key plus the complete matching
-`ecdsa-sha2-nistp256 ...` public-key line. The public line is required because
-the bundled mbedTLS backend cannot derive it from an EC private key. RSA-PEM
-remains compatible without supplying the public line. Ed25519 client
-authentication is not compiled into the pinned mbedTLS backend and therefore
-cannot be selected for this firmware. ECDSA P-384 and P-521 are accepted by the
-setup validator but have not yet been hardware-tested.
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\diagnose-platformio.ps1
+```
 
-Do not publish LittleFS images or device backups containing credentials.
+For the WEMOS LOLIN S2 Mini, use the `lolin_s2_mini` environment instead.
 
-### Minis-managed configuration
+## First boot and provisioning
 
-After the initial Minis bootstrap, the periodic heartbeat and configuration
-check are the same HTTPS request:
+If `/esp32tun.cfg` is absent or invalid, the firmware starts an open
+`esp32tun-XXXXXX` setup network. The captive portal normally opens
+automatically; `http://192.168.4.1` is the fallback.
+
+The WiFi page provides:
+
+- detected or custom SSID;
+- password with a show/hide eye button;
+- MAC profile: `Original ESP32`, `Cisco`, or `HP`.
+
+The MAC profile changes only the first three octets. The final three octets stay
+device-specific. A changed profile is stored and becomes active after restart;
+the firmware does not rewrite the station MAC while WiFi is running.
+
+After WiFi becomes available, the firmware starts the Minis control plane. If
+no usable local SSH identity exists, it automatically generates and stores an
+ECDSA P-256 key pair. The public key can be uploaded to Minis; the private key
+never leaves the ESP32.
+
+The tunnel setup page configures the SSH server and one reverse mapping. It can
+also accept a manually supplied password or private key. Saving the completed
+configuration restarts the device and normal tunnel operation begins without a
+web server left running.
+
+Stored WiFi/SSH credentials and private keys are plain text in LittleFS. Treat
+physical flash access and filesystem backups as credential access.
+
+## BOOT button
+
+Current reference-firmware behaviour:
+
+- **3 short clicks:** clear WiFi credentials and reopen WiFi setup while
+  preserving SSH keys, tunnel settings, Minis configuration, and MAC profile.
+- **Hold 4 seconds:** restart into tunnel-configuration edit mode without
+  clearing WiFi or SSH identity.
+- **5 short clicks:** full factory reset, including device configuration, SSH
+  keys, Minis configuration, and WiFi credentials.
+
+The configured button is GPIO 9 on `esp32_c3_lowmem` and GPIO 0 on
+`lolin_s2_mini`.
+
+## Minis control plane
+
+Heartbeat and managed configuration use the same short-lived HTTPS request:
 
 ```text
 GET /hb/<sid>/cfg.txt
 ```
 
-The reference firmware also performs one `cfg.txt` fetch shortly after the
-control-plane task starts. There is no separate periodic `HEAD /ping` request.
-Each scheduled cycle creates one short-lived TLS connection, fetches the config,
-then closes the connection.
+A managed configuration contains the heartbeat interval and complete tunnel
+settings. `MAC_VENDOR` is optional:
 
-A complete configuration can enable or disable the tunnel and set `SSH_HOST`,
-`SSH_PORT`, `REMOTE_BIND_HOST`, `REMOTE_BIND_PORT`, `LOCAL_HOST`, and
-`LOCAL_PORT`. The optional `MAC_VENDOR` field can be `ORIGINAL`, `CISCO`, or
-`HP`. If it is omitted, the locally stored MAC profile is preserved. The SSH
-username is always the lowercase eight-character SID; no `SSH_USER` field is
-accepted.
+```ini
+HB_INTERVAL_MIN=3
+TUNNEL_ENABLED=yes
+SSH_HOST=192.168.0.101
+SSH_PORT=22
+REMOTE_BIND_HOST=127.0.0.1
+REMOTE_BIND_PORT=23182
+LOCAL_HOST=192.168.0.14
+LOCAL_PORT=22
+MAC_VENDOR=CISCO
+```
 
-A changed `MAC_VENDOR` follows the same persist-and-restart policy as tunnel
-changes. The new vendor prefix is applied before WiFi initialization during the
-next boot; there is no live MAC replacement.
+Accepted MAC values are `ORIGINAL`, `CISCO`, and `HP`. If `MAC_VENDOR` is
+absent, the locally stored profile is preserved.
 
-The **private key and passphrase remain local on the ESP32** and are never
-uploaded to or downloaded from Minis. When a matching public key is configured,
-the firmware uploads that public key during normal startup through the existing
-Minis upload endpoint and stores it as:
+The SSH username is always the lowercase eight-character SID. The SID comes
+from the ESP32 eFuse identity, so changing the WiFi MAC does not change the SID
+or SSH identity.
+
+When managed tunnel or MAC settings change, the firmware writes the new
+`/esp32tun.cfg` and restarts. Configuration is deliberately applied through the
+normal boot path instead of live-replacing a working SSH session.
+
+The ESP32-C3 starts Minis TLS only when there is at least 70 KiB total free heap
+and a largest free block of at least 31 KiB. If memory is tighter, the request
+is deferred and SSH remains untouched. A missed control-plane cycle during
+heavy forwarded traffic is accepted behaviour.
+
+## Public key and Genesis inventory
+
+When a matching SSH public key is available, normal startup uploads:
 
 ```text
 /hb/<sid>/ui/ssh_public_key.txt
 ```
 
-Only the public key is sent. A successful registration produces a serial log
-similar to:
+The private key is never uploaded.
 
-```text
-[MINIS] Public key uploaded for SID 48e6ebac -> ui/ssh_public_key.txt
-```
-
-A valid managed config is compared with the settings currently stored on the
-device. When the managed settings are unchanged, no action is taken. When they
-change, the firmware stores the new `/esp32tun.cfg` and restarts. The new
-configuration is applied through the normal boot path. There is no live tunnel
-replacement or rollback state machine.
-
-If the Minis request fails, is deferred for memory pressure, or returns an
-invalid/incomplete `cfg.txt`, the current SSH session and stored configuration
-are left untouched.
-
-The ESP32-C3 control-plane TLS guard currently requires at least 70 KiB total
-free heap and a largest free block of at least 31 KiB before starting a Minis
-TLS connection. This protects SSH from known low-memory conditions, but it is a
-safety guard rather than a guarantee of TLS success. See
-[ESP32-C3 memory and stability notes](docs/ESP32_C3_MEMORY_NOTES.md) for the
-measured details.
-
-Heartbeat/config scheduling retains randomized jitter: the configured
-`HB_INTERVAL_MIN` is the base interval and a random delay from zero through the
-same base interval is added. This spreads device requests between one and two
-times the configured base interval.
-
-### Genesis inventory
-
-The firmware uploads a one-time `genesis.txt` inventory report through the
-existing Minis upload endpoint. The local marker is keyed to the SSH public-key
-diagnostic tag, so normal reboots, WiFi changes, and MAC-vendor changes do not
-create duplicate Genesis files.
-
-New Genesis reports record both the factory identity and the active WiFi MAC:
+The firmware also uploads one `genesis.txt` inventory report per SSH key
+identity. New reports include the factory MAC, active WiFi MAC, and selected MAC
+profile, for example:
 
 ```text
 Hardware-MAC: AC:EB:E6:48:F9:C8
@@ -276,82 +155,71 @@ WiFi-MAC: 00:00:0C:48:F9:C8
 MAC-Vendor: CISCO
 ```
 
-The SID remains derived from `ESP.getEfuseMac()` and therefore does not change
-when the WiFi MAC vendor changes. Existing Genesis files are not rewritten.
-After a full factory reset, a new SSH identity produces a new Genesis report.
+Normal reboot, WiFi-only reset, network change, or MAC-profile change does not
+create another Genesis report. A full factory reset creates a new SSH identity
+and therefore a new Genesis identity.
 
-The current Minis HTTPS transport still uses `setInsecure()`: traffic is
-encrypted, but the server certificate is not authenticated. No private SSH key
-is sent through this channel. TLS certificate validation is required before
-production deployment. SSH host-key verification is also currently disabled
-and remains a separate production-hardening task.
+## SSH authentication
 
-See the [example guide](examples/README.md) for the complete `cfg.txt` format
-and runtime flow, and [WiFi MAC vendor profiles](docs/WIFI_MAC_VENDOR.md) for
-MAC-selection details.
+The current reference firmware automatically creates ECDSA P-256 credentials
+when needed. Manual provisioning also supports the validated key paths:
+
+- traditional unencrypted RSA PEM;
+- ECDSA P-256 EC PEM with the matching OpenSSH public-key line.
+
+Ed25519 client authentication is not available in the pinned mbedTLS backend.
+See [`docs/SSH_KEYS_MEMORY.md`](docs/SSH_KEYS_MEMORY.md) for the current key
+model and [`docs/RSA_KEY_AUTH_FIX.md`](docs/RSA_KEY_AUTH_FIX.md) before changing
+or removing the pinned RSA compatibility patch.
+
+## Security status
+
+Two production-hardening items remain intentionally visible:
+
+- Minis HTTPS currently uses `setInsecure()`: traffic is encrypted, but the
+  Minis server certificate is not authenticated.
+- The reference firmware currently leaves SSH host-key verification disabled.
+  The library API supports fingerprint verification; see
+  [`docs/HOST_KEY_VERIFICATION.md`](docs/HOST_KEY_VERIFICATION.md).
 
 ## Status LED
 
-Both hardware reference profiles enable an active-low onboard status LED:
+The reference profiles use an active-low onboard LED:
 
-| Environment | LED pin | Polarity |
-| --- | ---: | --- |
-| `esp32_c3_lowmem` | GPIO 8 | Active-low |
-| `lolin_s2_mini` | GPIO 15 | Active-low |
+| Environment | LED pin |
+| --- | ---: |
+| `esp32_c3_lowmem` | GPIO 8 |
+| `lolin_s2_mini` | GPIO 15 |
 
-The indicator uses no task, timer object, PWM, or dynamic allocation; a small
-`millis()`-driven state machine is updated by the existing firmware loop.
-
-| State | LED pattern |
+| State | Pattern |
 | --- | --- |
-| No valid configuration | Three short flashes once, followed by setup blinking |
-| Setup page active | 0.5 seconds on, 0.5 seconds off |
-| WiFi or SSH connection in progress | Two short flashes every 2 seconds |
-| Reverse tunnel connected | Off |
-| Tunnel disabled by Minis | Off |
-| Connection or authentication error | Three short flashes every 2 seconds |
-
-These pin and polarity settings match the tested C3 Super Mini and WEMOS LOLIN
-S2 Mini hardware. Boards with an addressable RGB LED or a different LED
-connection must override
-`ESP32TUN_STATUS_LED_PIN` and `ESP32TUN_STATUS_LED_ACTIVE_LOW`, or set the pin
-to `-1` to compile the indicator out. Other environments keep it disabled by
-default.
+| Setup/missing configuration | setup blink sequence |
+| WiFi or SSH connecting | two short flashes every 2 seconds |
+| Reverse tunnel connected | off |
+| Tunnel disabled by Minis | off |
+| Connection/authentication error | three short flashes every 2 seconds |
 
 ## Connecting through the reverse tunnel
 
-The example binds its remote listener to `127.0.0.1`. This is intentional: the
-forwarded port is reachable only from the bastion and is not exposed directly
+The reference firmware normally binds the remote listener to `127.0.0.1`, so
+the forwarded port is reachable on the SSH bastion but is not exposed directly
 to the internet.
 
-From the bastion:
+Example from the bastion:
 
 ```bash
 ssh -p 23180 local-device-user@127.0.0.1
 ```
 
-From another computer, first forward a local port through the bastion:
+After a hard ESP reset or network loss, sshd can briefly retain the previous
+reverse listener. The ESP retry path normally recovers once the old server-side
+session is released. Persistent or minutes-long failures should be investigated
+on the SSH server rather than worked around with aggressive ESP reconnects.
 
-```bash
-ssh -p 22 -L 23181:127.0.0.1:23180 bastion-user@bastion.example.com
-```
+## Library use
 
-Keep that command running and connect in a second terminal:
-
-```bash
-ssh -p 23181 local-device-user@127.0.0.1
-```
-
-Wait for `Tunnel State: Connected` before opening the forwarded connection.
-After a hard ESP32 reset, sshd may temporarily retain the old listener. For a
-bastion, `ClientAliveInterval 15` and `ClientAliveCountMax 2` can be used to
-reap stale sessions more promptly; the client normally recovers through its
-existing retry path once the old listener is released.
-
-## Library usage
-
-Configure Wi-Fi before starting the tunnel, then configure the SSH server and
-one or more mappings:
+The library can also be used independently of the reference provisioning
+firmware:
 
 ```cpp
 #include "ESP-Reverse_Tunneling_Libssh2.h"
@@ -370,50 +238,28 @@ void setup() {
   tunnel.init();
   tunnel.connectSSH();
 }
+
+void loop() {
+  tunnel.loop();
+}
 ```
 
 The third `setBufferConfig` argument is the inactivity timeout per forwarded
-channel in milliseconds. `1800000` is 30 minutes; `0` disables idle channel
-closure. The outer SSH session keepalive is configured separately.
-
-## Authentication and server verification
-
-Password authentication is supported for initial testing. SSH key
-authentication and host-key verification are recommended for production:
-
-- [SSH key authentication](docs/SSH_KEYS_MEMORY.md)
-- [RSA key authentication fix and validation](docs/RSA_KEY_AUTH_FIX.md)
-- [Host-key verification](docs/HOST_KEY_VERIFICATION.md)
-
-The example currently logs a warning when host-key verification is disabled.
-Treat enabling verification as a required production-hardening step.
-
-## Multiple tunnels
-
-The provisioning page configures one mapping. Set `ENABLE_MULTI_TUNNEL_DEMO`
-to `1` only when intentionally testing the hard-coded sample multi-listener
-configuration. Applications can use `clearTunnelMappings()`,
-`setMaxReverseListeners()`, and `addTunnelMapping()` to configure several
-listeners before `connectSSH()`.
-
-## Resource usage
-
-PlatformIO prints the current static RAM and flash usage at build time. Use the
-current output of the target you are testing instead of relying on historical
-figures in documentation; memory-sensitive runtime decisions in this project
-are based on measured free heap, minimum heap, and largest free block on real
-hardware.
+channel in milliseconds. `0` disables channel inactivity closure.
 
 ## Documentation
 
-- [Example guide](examples/README.md)
-- [Technical documentation](docs/README.md)
-- [WiFi MAC vendor profiles](docs/WIFI_MAC_VENDOR.md)
-- [ESP32-C3 memory and stability notes](docs/ESP32_C3_MEMORY_NOTES.md)
-- [SSH key authentication](docs/SSH_KEYS_MEMORY.md)
-- [Host-key verification](docs/HOST_KEY_VERIFICATION.md)
-- [Integration tests](test/integration/README.md)
-- [Changelog](CHANGELOG.md)
+- [`examples/README.md`](examples/README.md) — reference-firmware runtime and
+  managed configuration
+- [`docs/README.md`](docs/README.md) — technical documentation index
+- [`docs/ESP32_C3_MEMORY_NOTES.md`](docs/ESP32_C3_MEMORY_NOTES.md) — C3
+  anti-regression constraints
+- [`docs/WIFI_MAC_VENDOR.md`](docs/WIFI_MAC_VENDOR.md) — MAC profiles
+- [`docs/SSH_KEYS_MEMORY.md`](docs/SSH_KEYS_MEMORY.md) — SSH identity/key model
+- [`docs/HOST_KEY_VERIFICATION.md`](docs/HOST_KEY_VERIFICATION.md) — host-key
+  verification API
+- [`test/README`](test/README) — test layout
+- [`CHANGELOG.md`](CHANGELOG.md) — project history
 
 ## License
 
