@@ -261,10 +261,11 @@ void writeValue(File &file, const char *name, const String &value) {
 bool writeConfig(const DeviceRuntimeConfig &c) {
   File file = LittleFS.open(CONFIG_TEMP, "w");
   if (!file) return false;
-  file.println(F("version=3"));
+  file.println(F("version=4"));
   file.println(c.setupComplete ? F("setup_complete=1") : F("setup_complete=0"));
   writeValue(file, "wifi_ssid", c.wifiSsid);
   writeValue(file, "wifi_password", c.wifiPassword);
+  writeValue(file, "mac_vendor", mac_vendor::configValue(c.macVendor));
   if (c.setupComplete) {
     writeValue(file, "ssh_host", c.sshHost);
     writeValue(file, "ssh_port", String(c.sshPort));
@@ -319,7 +320,7 @@ bool loadConfig(DeviceRuntimeConfig &c) {
   File file = LittleFS.open(CONFIG_PATH, "r");
   if (!file) return false;
   int version = 0;
-  String complete, sshPort, remotePort, localPort, auth, tunnelEnabled;
+  String complete, sshPort, remotePort, localPort, auth, tunnelEnabled, macVendor;
   while (file.available()) {
     String line = file.readStringUntil('\n');
     if (line.endsWith("\r")) line.remove(line.length() - 1);
@@ -330,6 +331,7 @@ bool loadConfig(DeviceRuntimeConfig &c) {
     else if (name == "setup_complete") complete = value;
     else if (name == "wifi_ssid") c.wifiSsid = value;
     else if (name == "wifi_password") c.wifiPassword = value;
+    else if (name == "mac_vendor") macVendor = value;
     else if (name == "ssh_host") c.sshHost = value;
     else if (name == "ssh_port") sshPort = value;
     else if (name == "ssh_user") c.sshUsername = value;
@@ -342,11 +344,16 @@ bool loadConfig(DeviceRuntimeConfig &c) {
     else if (name == "local_host") c.localHost = value;
     else if (name == "local_port") localPort = value;
   }
-  if ((version != 1 && version != 2 && version != 3) || c.wifiSsid.isEmpty() ||
+  if ((version < 1 || version > 4) || c.wifiSsid.isEmpty() ||
       c.wifiSsid.length() > 32 || c.wifiPassword.length() > 63)
     return false;
+  if (version >= 4) {
+    if (!mac_vendor::parse(macVendor, c.macVendor)) return false;
+  } else {
+    c.macVendor = MacVendor::Original;
+  }
   if (version == 1 || complete != "1") return true;
-  if (version == 3) {
+  if (version >= 3) {
     if (tunnelEnabled != "0" && tunnelEnabled != "1") return true;
     c.tunnelEnabled = tunnelEnabled == "1";
   }
@@ -374,7 +381,13 @@ void sendWifiPage(const String &error = "") {
     String ssid = escapeHtml(WiFi.SSID(i));
     p += F("<option value=\""); p += ssid; p += F("\">"); p += ssid; p += F(" ("); p += String(WiFi.RSSI(i)); p += F(" dBm)</option>");
   }
-  p += F("</select><label>Hidden or custom SSID</label><input name='custom_ssid' maxlength='32'><label>WiFi password</label><div style='position:relative'><input id='wifi-password' name='password' type='password' maxlength='63' style='padding-right:52px'><button type='button' aria-label='Show or hide WiFi password' title='Show or hide password' onclick='toggleWifiPassword()' style='position:absolute;right:6px;top:6px;width:40px;padding:6px;background:transparent;color:#56616d;border:0;font-size:20px'>&#128065;</button></div><button>Test and continue</button></form><p class='note'>The network is tested before it is stored.</p><script>function toggleWifiPassword(){let p=document.getElementById('wifi-password');p.type=p.type==='password'?'text':'password'}</script></main></body></html>");
+  p += F("</select><label>Hidden or custom SSID</label><input name='custom_ssid' maxlength='32'><label>WiFi password</label><div style='position:relative'><input id='wifi-password' name='password' type='password' maxlength='63' style='padding-right:52px'><button type='button' aria-label='Show or hide WiFi password' title='Show or hide password' onclick='toggleWifiPassword()' style='position:absolute;right:6px;top:6px;width:40px;padding:6px;background:transparent;color:#56616d;border:0;font-size:20px'>&#128065;</button></div><label>MAC vendor</label><select name='mac_vendor'><option value='ORIGINAL'");
+  if (current->macVendor == MacVendor::Original) p += F(" selected");
+  p += F(">Original ESP32</option><option value='CISCO'");
+  if (current->macVendor == MacVendor::Cisco) p += F(" selected");
+  p += F(">Cisco</option><option value='HP'");
+  if (current->macVendor == MacVendor::HP) p += F(" selected");
+  p += F(">HP</option></select><p class='note'>Only the first three MAC octets change; the final three remain device-specific.</p><button>Test and continue</button></form><p class='note'>The network is tested before it is stored.</p><script>function toggleWifiPassword(){let p=document.getElementById('wifi-password');p.type=p.type==='password'?'text':'password'}</script></main></body></html>");
   server->send(200, "text/html; charset=utf-8", p);
 }
 void sendDevicePage(const String &error = "") {
@@ -444,16 +457,25 @@ bool startDevicePortalInternal() {
 void handleWifiSave() {
   String ssid = server->arg("custom_ssid"); if (ssid.isEmpty()) ssid = server->arg("ssid");
   String password = server->arg("password");
+  MacVendor selectedVendor = MacVendor::Original;
+  if (!mac_vendor::parse(server->arg("mac_vendor"), selectedVendor)) { sendWifiPage("Select a valid MAC vendor."); return; }
   if (ssid.isEmpty() || ssid.length() > 32) { sendWifiPage("The SSID is missing or too long."); return; }
   if (!password.isEmpty() && (password.length() < 8 || password.length() > 63)) { sendWifiPage("A WiFi password must contain 8 to 63 characters."); return; }
+  if (!mac_vendor::prepareStation(selectedVendor)) { sendWifiPage("The selected MAC vendor could not be applied."); return; }
   WiFi.begin(ssid.c_str(), password.c_str());
   unsigned long started = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - started < WIFI_TIMEOUT_MS) delay(100);
-  if (WiFi.status() != WL_CONNECTED) { WiFi.disconnect(false, false); sendWifiPage("Connection failed. Check the SSID and password."); return; }
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.disconnect(false, false);
+    mac_vendor::prepareStation(current->macVendor);
+    sendWifiPage("Connection failed. Check the SSID and password.");
+    return;
+  }
 
   const bool preserveDeviceConfig = wifiResetRequested && current->setupComplete;
   current->wifiSsid = ssid;
   current->wifiPassword = password;
+  current->macVendor = selectedVendor;
   if (!preserveDeviceConfig)
     current->setupComplete = false;
   if (!writeConfig(*current)) { sendWifiPage("WiFi worked, but the configuration could not be stored."); return; }
@@ -465,7 +487,7 @@ void handleWifiSave() {
 
   if (preserveDeviceConfig) {
     String p = pageStart("WiFi updated");
-    p += F("<p>The new WiFi credentials were stored. The existing SSH key and tunnel configuration were kept.</p><p>The device will restart and reconnect automatically.</p></main></body></html>");
+    p += F("<p>The new WiFi credentials and MAC vendor were stored. The existing SSH key and tunnel configuration were kept.</p><p>The device will restart and reconnect automatically.</p></main></body></html>");
     server->send(200, "text/html; charset=utf-8", p);
     LOG_I("SETUP", "WiFi updated; preserving SSH key and tunnel configuration");
     delay(1500);
