@@ -1,11 +1,13 @@
 #pragma once
 #include <Arduino.h>
+#include "mac_vendor.h"
 
 enum class SSHAuthMethod { Password, PrivateKey };
 
 struct DeviceRuntimeConfig {
   String wifiSsid;
   String wifiPassword;
+  MacVendor macVendor = MacVendor::Original;
   bool setupComplete = false;
   String sshHost;
   int sshPort = 22;
