@@ -11,6 +11,7 @@ namespace {
 constexpr uint8_t CISCO_OUI[3] = {0x00, 0x00, 0x0C};
 constexpr uint8_t HP_OUI[3] = {0x3C, 0xD9, 0x2B};
 MacVendor currentVendor = MacVendor::Original;
+bool stationPrepared = false;
 
 bool factoryStationMac(uint8_t mac[6]) {
   // On ESP32-C3 the WiFi STA address is the factory base MAC. Reading EFUSE
@@ -58,34 +59,34 @@ bool parse(const String &value, MacVendor &vendor) {
 }
 
 bool prepareStation(MacVendor vendor) {
+  // The normal reconnect path calls this again after WiFi.mode(WIFI_STA).
+  // Never touch MAC configuration again once it was prepared pre-init.
+  if (stationPrepared)
+    return vendor == currentVendor;
+
   uint8_t mac[6] = {0};
   if (!factoryStationMac(mac)) {
     LOG_E("WIFI", "Unable to read factory ESP32 station MAC");
     return false;
   }
 
-  if (vendor == MacVendor::Original) {
-    currentVendor = vendor;
-    LOGF_I("WIFI", "MAC profile ORIGINAL prepared: %s", formatMac(mac).c_str());
-    return true;
-  }
+  if (vendor != MacVendor::Original) {
+    const uint8_t *oui = vendor == MacVendor::Cisco ? CISCO_OUI : HP_OUI;
+    mac[0] = oui[0];
+    mac[1] = oui[1];
+    mac[2] = oui[2];
 
-  const uint8_t *oui = vendor == MacVendor::Cisco ? CISCO_OUI : HP_OUI;
-  mac[0] = oui[0];
-  mac[1] = oui[1];
-  mac[2] = oui[2];
-
-  // esp_iface_mac_addr_set() may set an interface address before that network
-  // interface exists. This avoids esp_wifi_set_mac(), which requires the WiFi
-  // interface to be disabled and is therefore a poor fit for Arduino startup.
-  const esp_err_t result = esp_iface_mac_addr_set(mac, ESP_MAC_WIFI_STA);
-  if (result != ESP_OK) {
-    LOGF_E("WIFI", "Unable to prepare %s MAC profile (esp_err=%d)",
-           configValue(vendor), static_cast<int>(result));
-    return false;
+    // This API may set an interface address before that interface exists.
+    const esp_err_t result = esp_iface_mac_addr_set(mac, ESP_MAC_WIFI_STA);
+    if (result != ESP_OK) {
+      LOGF_E("WIFI", "Unable to prepare %s MAC profile (esp_err=%d)",
+             configValue(vendor), static_cast<int>(result));
+      return false;
+    }
   }
 
   currentVendor = vendor;
+  stationPrepared = true;
   LOGF_I("WIFI", "MAC profile %s prepared: %s", configValue(vendor),
          formatMac(mac).c_str());
   return true;
