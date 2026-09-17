@@ -1,5 +1,6 @@
 #include "minis_public_key_upload.h"
 
+#include "mac_vendor.h"
 #include "minis_registration.h"
 #include "ESP-Reverse_Tunneling_Libssh2.h"
 #include <LittleFS.h>
@@ -163,7 +164,7 @@ bool storeGenesisMarker(const String &keyTag) {
 String buildGenesisReport(const String &sid, const String &publicKey,
                           const String &keyTag) {
   String report;
-  report.reserve(768);
+  report.reserve(832);
   report += "==== MHB GENESIS REPORT ====\n";
   report += "Client-Type: ESP32\n";
   report += "SID: ";
@@ -180,8 +181,12 @@ String buildGenesisReport(const String &sid, const String &publicKey,
   report += __DATE__;
   report += " ";
   report += __TIME__;
-  report += "\nMAC: ";
-  report += WiFi.macAddress();
+  report += "\nHardware-MAC: ";
+  report += mac_vendor::hardwareAddress();
+  report += "\nWiFi-MAC: ";
+  report += mac_vendor::activeAddress();
+  report += "\nMAC-Vendor: ";
+  report += mac_vendor::configValue(mac_vendor::appliedVendor());
   report += "\nSSH-Key-Algorithm: ";
   report += publicKeyAlgorithm(publicKey);
   report += "\nSSH-Key-Tag: ";
