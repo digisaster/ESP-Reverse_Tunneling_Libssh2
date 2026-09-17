@@ -8,12 +8,22 @@ reference `esp32tun` firmware.
 ### [ESP32_C3_MEMORY_NOTES.md](ESP32_C3_MEMORY_NOTES.md)
 Authoritative ESP32-C3 low-memory design and measurement record:
 
-- current 2 KB transport/prepend profile
+- current 2 KB shared transport work buffer
 - 8 KB directional channel rings
 - Minis TLS memory guard
 - combined heartbeat/config request
 - measured active-channel heap behaviour
 - rejected memory approaches
+
+### [WIFI_MAC_VENDOR.md](WIFI_MAC_VENDOR.md)
+WiFi MAC-vendor profiles in the reference firmware:
+
+- `ORIGINAL`, `CISCO`, and `HP` profiles
+- captive-portal selection and persistent config
+- optional Minis `MAC_VENDOR` setting
+- reboot-only application model
+- SID/SSH identity stability
+- Genesis hardware/active MAC reporting
 
 ### [SSH_KEYS_MEMORY.md](SSH_KEYS_MEMORY.md)
 SSH key authentication with in-memory use:
@@ -151,7 +161,7 @@ The current `esp32_c3_lowmem` profile intentionally supports one active
 forwarded channel and uses:
 
 ```text
-transport buffer:       2048 bytes
+transport work buffer:  2048 bytes shared by RX/TX phases
 max active channels:    1
 ring buffer per side:   8192 bytes
 prepend capacity:       2048 bytes per ring
@@ -161,6 +171,17 @@ SSH keepalive:          30 seconds
 Do not reduce the proven 8 KB channel rings merely to create room for Minis
 TLS. See [ESP32_C3_MEMORY_NOTES.md](ESP32_C3_MEMORY_NOTES.md) before changing
 memory-sensitive code.
+
+## Reference-firmware WiFi MAC profiles
+
+The provisioning UI can keep the factory ESP32 WiFi MAC or apply a Cisco/HP
+vendor prefix while retaining the final three device-specific octets. The
+selection is persisted in `/esp32tun.cfg` and is applied before WiFi starts.
+Vendor changes are never made live on an active WiFi interface.
+
+The Minis SID remains based on the ESP32 eFuse identity and therefore does not
+change with the WiFi MAC profile. See
+[WIFI_MAC_VENDOR.md](WIFI_MAC_VENDOR.md) for details and operational caveats.
 
 ## Minis-managed configuration
 
@@ -172,8 +193,36 @@ GET /hb/<sid>/cfg.txt
 ```
 
 There is no separate periodic `HEAD /ping`. A valid changed configuration is
-stored and the ESP32 restarts; the new tunnel settings are applied on the next
-boot. Failed/deferred control-plane requests leave SSH untouched.
+stored and the ESP32 restarts; the new settings are applied on the next boot.
+Failed/deferred control-plane requests leave SSH untouched.
+
+The optional managed field:
+
+```ini
+MAC_VENDOR=CISCO
+```
+
+accepts `ORIGINAL`, `CISCO`, or `HP`. Omitting it preserves the locally stored
+selection. A changed value uses the same persist-and-restart flow as tunnel
+changes.
+
+## Genesis inventory
+
+The reference firmware uploads one Genesis inventory report per SSH key
+identity. New reports include both the factory and active WiFi addresses plus
+the selected vendor profile. Normal reboot, WiFi-only reset, or MAC-vendor
+change does not create a duplicate Genesis because the marker is tied to the
+SSH public-key diagnostic tag.
+
+## BOOT-button reference
+
+Current reference-firmware behaviour:
+
+- 3 short clicks: WiFi-only reset; SSH/tunnel/key/Minis settings and MAC vendor
+  are preserved.
+- hold 4 seconds: reopen stored tunnel configuration.
+- 5 short clicks: full factory reset, including stored SSH keys and device
+  configuration.
 
 ## Performance optimization rules
 
@@ -262,6 +311,7 @@ globalSSHConfig.diagnoseSSHKeys();
 ## Related documents
 
 - [Example firmware](../examples/README.md)
+- [WiFi MAC vendor profiles](WIFI_MAC_VENDOR.md)
 - [ESP32-C3 memory notes](ESP32_C3_MEMORY_NOTES.md)
 - [Historical heartbeat measurement record](ESP32_C3_HEARTBEAT_MEASUREMENT.md)
 - [SSH key authentication](SSH_KEYS_MEMORY.md)
@@ -270,5 +320,5 @@ globalSSHConfig.diagnoseSSHKeys();
 
 ---
 
-**Documentation version:** 1.2
-**Last update:** 2026-09-15
+**Documentation version:** 1.3
+**Last update:** 2026-09-17
