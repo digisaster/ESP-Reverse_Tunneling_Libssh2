@@ -376,9 +376,9 @@ void SSHConfiguration::printConfiguration() const {
     LOGF_I("CONFIG", "SSH User: %s", sshConfig.username.c_str());
     LOGF_I("CONFIG", "SSH Auth: %s", sshConfig.useSSHKey ? "Key" : "Password");
     if (sshConfig.useSSHKey) {
-      LOGF_I("CONFIG",
-             "SSH Keys: In memory (private: %d bytes, public: %d bytes)",
-             sshConfig.privateKeyData.length(), sshConfig.publicKeyData.length());
+      LOGF_I(
+          "CONFIG", "SSH Keys: In memory (private: %d bytes, public: %d bytes)",
+          sshConfig.privateKeyData.length(), sshConfig.publicKeyData.length());
     }
 
     LOG_I("CONFIG", "=== Tunnel Configuration ===");
