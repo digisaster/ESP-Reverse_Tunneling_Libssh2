@@ -45,6 +45,13 @@ This is the candidate baseline for `esp32tun` reference firmware
 
 ### Changed
 
+- Removed pre-release compatibility/dead-code paths that were not used by the
+  current firmware or tests: file-path SSH key authentication, legacy
+  configuration macros/placeholders, the inactive listener-relisten watchdog,
+  the hard-coded multi-tunnel firmware demo, and the obsolete managed-setup
+  close helper. The generated `examples/sdkconfig.esp32dev` file was also
+  removed; supported builds remain defined by PlatformIO environments.
+
 - BOOT-button behaviour is now explicit and non-destructive by default:
   3 short clicks reset WiFi only, holding BOOT for 4 seconds reopens the stored
   tunnel configuration, and 5 short clicks perform a full factory reset.
