@@ -1,6 +1,6 @@
 #pragma once
-#include <Arduino.h>
 #include "mac_vendor.h"
+#include <Arduino.h>
 
 enum class SSHAuthMethod { Password, PrivateKey };
 

@@ -4,13 +4,13 @@
 #include <LittleFS.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <climits>
+#include <cstring>
 #include <esp_heap_caps.h>
 #include <esp_random.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
-#include <climits>
-#include <cstring>
 
 namespace minis_registration {
 namespace {
@@ -90,8 +90,7 @@ void removeIfExists(const char *path) {
 
 void logTlsHeap(const char *stage) {
   const size_t freeHeap = ESP.getFreeHeap();
-  const size_t largestBlock =
-      heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  const size_t largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   LOGF_I("MINIS", "TLS heap %s: free=%u largest=%u min=%u", stage,
          static_cast<unsigned int>(freeHeap),
          static_cast<unsigned int>(largestBlock),
@@ -100,11 +99,11 @@ void logTlsHeap(const char *stage) {
 
 bool tlsMemoryAvailable(const char *requestName) {
   const size_t freeHeap = ESP.getFreeHeap();
-  const size_t largestBlock =
-      heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  const size_t largestBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
   if (freeHeap < MINIS_TLS_MIN_FREE_HEAP) {
     LOGF_W("MINIS",
-           "%s TLS deferred: free heap %u is below %u bytes (largest=%u); SSH left untouched",
+           "%s TLS deferred: free heap %u is below %u bytes (largest=%u); SSH "
+           "left untouched",
            requestName, static_cast<unsigned int>(freeHeap),
            static_cast<unsigned int>(MINIS_TLS_MIN_FREE_HEAP),
            static_cast<unsigned int>(largestBlock));
@@ -112,7 +111,8 @@ bool tlsMemoryAvailable(const char *requestName) {
   }
   if (largestBlock < MINIS_TLS_MIN_LARGEST_BLOCK) {
     LOGF_W("MINIS",
-           "%s TLS deferred: largest heap block %u is below %u bytes; SSH left untouched",
+           "%s TLS deferred: largest heap block %u is below %u bytes; SSH left "
+           "untouched",
            requestName, static_cast<unsigned int>(largestBlock),
            static_cast<unsigned int>(MINIS_TLS_MIN_LARGEST_BLOCK));
     return false;
@@ -355,9 +355,9 @@ bool isValidConfigHost(const char *host) {
     return false;
   for (size_t i = 0; i < length; ++i) {
     const char value = host[i];
-    const bool alphaNumeric =
-        (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
-        (value >= '0' && value <= '9');
+    const bool alphaNumeric = (value >= 'a' && value <= 'z') ||
+                              (value >= 'A' && value <= 'Z') ||
+                              (value >= '0' && value <= '9');
     if (!alphaNumeric && value != '.' && value != '-' && value != ':' &&
         value != '[' && value != ']')
       return false;
@@ -368,8 +368,7 @@ bool isValidConfigHost(const char *host) {
 bool isValidMacVendor(const char *vendor) {
   return equalsIgnoreCase(vendor, "ORIGINAL") ||
          equalsIgnoreCase(vendor, "ESP32") ||
-         equalsIgnoreCase(vendor, "CISCO") ||
-         equalsIgnoreCase(vendor, "HP");
+         equalsIgnoreCase(vendor, "CISCO") || equalsIgnoreCase(vendor, "HP");
 }
 
 bool parseConfig(char *config, ParsedConfig &parsed) {
@@ -388,10 +387,9 @@ bool parseConfig(char *config, ParsedConfig &parsed) {
         if (parsed.heartbeatIntervalPresent)
           structurallyValid = false;
         parsed.heartbeatIntervalPresent = true;
-        parsed.heartbeatIntervalValid =
-            result == SettingResult::Valid &&
-            value >= MIN_HEARTBEAT_INTERVAL_MIN &&
-            value <= MAX_HEARTBEAT_INTERVAL_MIN;
+        parsed.heartbeatIntervalValid = result == SettingResult::Valid &&
+                                        value >= MIN_HEARTBEAT_INTERVAL_MIN &&
+                                        value <= MAX_HEARTBEAT_INTERVAL_MIN;
         if (parsed.heartbeatIntervalValid)
           parsed.heartbeatIntervalMin = static_cast<uint16_t>(value);
       }
@@ -425,8 +423,8 @@ bool parseConfig(char *config, ParsedConfig &parsed) {
         if (parsed.sshPortPresent)
           structurallyValid = false;
         parsed.sshPortPresent = true;
-        parsed.sshPortValid = result == SettingResult::Valid && value >= 1 &&
-                              value <= 65535;
+        parsed.sshPortValid =
+            result == SettingResult::Valid && value >= 1 && value <= 65535;
         if (parsed.sshPortValid)
           parsed.sshPort = static_cast<uint16_t>(value);
       }
@@ -473,8 +471,8 @@ bool parseConfig(char *config, ParsedConfig &parsed) {
         if (parsed.localPortPresent)
           structurallyValid = false;
         parsed.localPortPresent = true;
-        parsed.localPortValid = result == SettingResult::Valid && value >= 1 &&
-                                value <= 65535;
+        parsed.localPortValid =
+            result == SettingResult::Valid && value >= 1 && value <= 65535;
         if (parsed.localPortValid)
           parsed.localPort = static_cast<uint16_t>(value);
       }
@@ -602,7 +600,8 @@ bool refreshConfig() {
   const int status =
       performGet("/cfg.txt", config, sizeof(config), &configLength);
   if (status != 200) {
-    LOGF_I("MINIS", "Heartbeat/config request unavailable (HTTP %d); keeping %u min",
+    LOGF_I("MINIS",
+           "Heartbeat/config request unavailable (HTTP %d); keeping %u min",
            status, static_cast<unsigned int>(heartbeatIntervalMin));
     return false;
   }

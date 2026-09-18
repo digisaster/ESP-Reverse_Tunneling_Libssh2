@@ -1,8 +1,8 @@
 #include "minis_public_key_upload.h"
 
+#include "ESP-Reverse_Tunneling_Libssh2.h"
 #include "mac_vendor.h"
 #include "minis_registration.h"
-#include "ESP-Reverse_Tunneling_Libssh2.h"
 #include <LittleFS.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -135,8 +135,7 @@ bool uploadTextFile(const String &sid, const char *dest, const char *filename,
   const String statusLine = client.readStringUntil('\n');
   const bool ok = statusLine.indexOf(" 200 ") >= 0;
   if (!ok)
-    LOGF_W("MINIS", "%s upload HTTP failure: %s", label,
-           statusLine.c_str());
+    LOGF_W("MINIS", "%s upload HTTP failure: %s", label, statusLine.c_str());
   client.stop();
   return ok;
 }
@@ -212,20 +211,23 @@ void uploadGenesisIfNeeded(const String &sid, const String &publicKey) {
   }
 
   const String report = buildGenesisReport(sid, publicKey, keyTag);
-  const String userAgent = String("MHB;payload;genesis;ESP32;") + sid +
-                           ";embedded";
+  const String userAgent =
+      String("MHB;payload;genesis;ESP32;") + sid + ";embedded";
   // No dest field on purpose: this follows the Windows genesis module and
   // therefore lands in the default per-client upload directory.
-  if (!uploadTextFile(sid, nullptr, "genesis.txt", report,
-                      userAgent.c_str(), "Genesis")) {
-    LOG_W("MINIS", "Genesis upload did not complete; it will retry after a future reboot");
+  if (!uploadTextFile(sid, nullptr, "genesis.txt", report, userAgent.c_str(),
+                      "Genesis")) {
+    LOG_W(
+        "MINIS",
+        "Genesis upload did not complete; it will retry after a future reboot");
     return;
   }
 
   LOGF_I("MINIS", "Genesis uploaded for SID %s (SSH key tag %s)", sid.c_str(),
          keyTag.c_str());
   if (!storeGenesisMarker(keyTag)) {
-    LOG_W("MINIS", "Genesis upload succeeded but local marker could not be stored; a later boot may upload it again");
+    LOG_W("MINIS", "Genesis upload succeeded but local marker could not be "
+                   "stored; a later boot may upload it again");
   }
 }
 } // namespace
