@@ -10,20 +10,12 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-#ifndef ENABLE_MULTI_TUNNEL_DEMO
-#define ENABLE_MULTI_TUNNEL_DEMO 0
-#endif
-
 static constexpr size_t CRITICAL_FREE_HEAP_BYTES = 12 * 1024;
 static constexpr size_t CRITICAL_LARGEST_BLOCK_BYTES = 4 * 1024;
 static constexpr unsigned long STATS_INTERVAL = 10000;
 
 #ifndef SSH_TUNNEL_LOW_MEMORY_PROFILE
 #define SSH_TUNNEL_LOW_MEMORY_PROFILE 0
-#endif
-
-#if SSH_TUNNEL_LOW_MEMORY_PROFILE && ENABLE_MULTI_TUNNEL_DEMO
-#error "The low-memory profile supports only one tunnel mapping"
 #endif
 
 #if SSH_TUNNEL_LOW_MEMORY_PROFILE
@@ -51,7 +43,6 @@ void reportStats();
 void configureSSHTunnel();
 void configureCommonTunnelSettings();
 void applyPendingMinisConfig();
-void configureMultiTunnelMappings();
 void registerTunnelCallbacks();
 const char *closeReasonToString(ChannelCloseReason reason);
 void onSessionConnected();
@@ -258,13 +249,10 @@ void configureSSHTunnel() {
     deviceConfig.sshPassword = "";
   }
 
-  if (ENABLE_MULTI_TUNNEL_DEMO)
-    configureMultiTunnelMappings();
-  else
-    globalSSHConfig.setTunnelConfig(deviceConfig.remoteBindHost,
-                                    deviceConfig.remoteBindPort,
-                                    deviceConfig.localHost,
-                                    deviceConfig.localPort);
+  globalSSHConfig.setTunnelConfig(deviceConfig.remoteBindHost,
+                                  deviceConfig.remoteBindPort,
+                                  deviceConfig.localHost,
+                                  deviceConfig.localPort);
   configureCommonTunnelSettings();
   LOG_I("CONFIG", "Configuration complete");
 }
@@ -333,15 +321,6 @@ void applyPendingMinisConfig() {
   LOG_I("MINIS", "Changed cfg.txt stored; restarting to apply it cleanly");
   delay(250);
   ESP.restart();
-}
-
-void configureMultiTunnelMappings() {
-  LOG_I("CONFIG", "Configuring multi-tunnel demo mappings");
-  globalSSHConfig.clearTunnelMappings();
-  globalSSHConfig.setMaxReverseListeners(3);
-  globalSSHConfig.addTunnelMapping("127.0.0.1", 22080, "192.168.1.100", 80);
-  globalSSHConfig.addTunnelMapping("127.0.0.1", 22081, "192.168.1.150", 502);
-  globalSSHConfig.addTunnelMapping("127.0.0.1", 22082, "192.168.1.200", 22);
 }
 
 void registerTunnelCallbacks() {
