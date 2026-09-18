@@ -62,8 +62,8 @@ prepend capacity per ring:          2048 bytes
 ```
 
 The same 2 KB work buffer is reused because RX and TX pump phases are
-sequential. Do not enable the hard-coded multi-tunnel demo on this low-memory
-profile.
+sequential. The reference firmware intentionally configures one persisted
+mapping; multi-listener coverage lives in the separate integration-test firmware.
 
 For memory-sensitive changes, follow
 [`../docs/ESP32_C3_MEMORY_NOTES.md`](../docs/ESP32_C3_MEMORY_NOTES.md).
