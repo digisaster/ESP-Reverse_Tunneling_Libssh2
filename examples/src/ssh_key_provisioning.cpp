@@ -93,8 +93,9 @@ bool appendBytes(unsigned char *buffer, size_t capacity, size_t &used,
   return true;
 }
 
-bool extractP256PointFromSpki(const unsigned char *der, size_t derLength,
-                              unsigned char point[P256_UNCOMPRESSED_POINT_SIZE]) {
+bool extractP256PointFromSpki(
+    const unsigned char *der, size_t derLength,
+    unsigned char point[P256_UNCOMPRESSED_POINT_SIZE]) {
   // RFC 5480 SubjectPublicKeyInfo for a P-256 key ends with the SEC1
   // uncompressed point: 0x04 || X(32) || Y(32). mbedTLS may encode the
   // surrounding BIT STRING differently between versions, so do not depend on
@@ -160,15 +161,15 @@ bool buildOpenSshPublicKey(mbedtls_pk_context &pk, String &publicKey) {
   unsigned char encoded[OPENSSH_BASE64_BUFFER_SIZE] = {0};
   size_t encodedLength = 0;
   const int result = mbedtls_base64_encode(encoded, sizeof(encoded) - 1,
-                                            &encodedLength, blob, blobLength);
+                                           &encodedLength, blob, blobLength);
   if (result != 0) {
     logMbedTlsError("OpenSSH public-key base64 encoding", result);
     return false;
   }
   encoded[encodedLength] = '\0';
 
-  publicKey = String(ALGORITHM) + " " +
-              String(reinterpret_cast<const char *>(encoded));
+  publicKey =
+      String(ALGORITHM) + " " + String(reinterpret_cast<const char *>(encoded));
   return true;
 }
 
