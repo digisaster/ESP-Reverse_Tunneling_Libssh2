@@ -1,0 +1,29 @@
+name: Format Export
+
+on:
+  push:
+    branches: [ ci-format-fix ]
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+          clang-format --version
+      - name: Format source tree
+        run: |
+          find src include examples -type f \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) -print0 | xargs -0 -r clang-format -i
+          git diff --stat
+      - name: Export formatted tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: formatted-source
+          path: |
+            src
+            include
+            examples
+          if-no-files-found: error
