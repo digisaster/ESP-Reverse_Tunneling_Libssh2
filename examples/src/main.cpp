@@ -110,10 +110,12 @@ void setup() {
   tunnelRuntimeReady = true;
   if (!deviceConfig.tunnelEnabled) {
     status_led::set(status_led::State::Disabled);
-    LOG_I("MAIN", "Setup completed with tunnel disabled by managed configuration");
+    LOG_I("MAIN",
+          "Setup completed with tunnel disabled by managed configuration");
   } else if (!tunnel.connectSSH()) {
     status_led::set(status_led::State::Error);
-    LOG_W("MAIN", "Setup completed, but the SSH tunnel is not connected; retry logic remains active");
+    LOG_W("MAIN", "Setup completed, but the SSH tunnel is not connected; retry "
+                  "logic remains active");
   } else {
     LOG_I("MAIN", "Setup completed successfully");
   }
@@ -156,7 +158,8 @@ void connectWiFi() {
   WiFi.mode(WIFI_STA);
   if (!mac_vendor::prepareStation(deviceConfig.macVendor)) {
     status_led::set(status_led::State::Error);
-    LOG_E("WIFI", "Unable to apply configured MAC vendor; WiFi connect aborted");
+    LOG_E("WIFI",
+          "Unable to apply configured MAC vendor; WiFi connect aborted");
     return;
   }
   WiFi.begin(deviceConfig.wifiSsid.c_str(), deviceConfig.wifiPassword.c_str());
@@ -249,10 +252,9 @@ void configureSSHTunnel() {
     deviceConfig.sshPassword = "";
   }
 
-  globalSSHConfig.setTunnelConfig(deviceConfig.remoteBindHost,
-                                  deviceConfig.remoteBindPort,
-                                  deviceConfig.localHost,
-                                  deviceConfig.localPort);
+  globalSSHConfig.setTunnelConfig(
+      deviceConfig.remoteBindHost, deviceConfig.remoteBindPort,
+      deviceConfig.localHost, deviceConfig.localPort);
   configureCommonTunnelSettings();
   LOG_I("CONFIG", "Configuration complete");
 }
@@ -265,7 +267,8 @@ void applyPendingMinisConfig() {
   MacVendor managedMacVendor = deviceConfig.macVendor;
   if (managed.macVendorPresent &&
       !mac_vendor::parse(managed.macVendor, managedMacVendor)) {
-    LOG_W("MINIS", "cfg.txt contains an unsupported MAC_VENDOR; configuration ignored");
+    LOG_W("MINIS",
+          "cfg.txt contains an unsupported MAC_VENDOR; configuration ignored");
     return;
   }
 
@@ -288,7 +291,8 @@ void applyPendingMinisConfig() {
   }
 
   if (deviceConfig.sshAuthMethod != SSHAuthMethod::PrivateKey) {
-    LOG_W("MINIS", "Managed cfg.txt requires the locally stored SSH key; configuration ignored");
+    LOG_W("MINIS", "Managed cfg.txt requires the locally stored SSH key; "
+                   "configuration ignored");
     return;
   }
 
@@ -305,7 +309,8 @@ void applyPendingMinisConfig() {
   next.macVendor = managedMacVendor;
 
   LOGF_I("MINIS",
-         "cfg.txt changed: enabled=%s ssh=%s@%s:%u remote=%s:%u local=%s:%u mac_vendor=%s",
+         "cfg.txt changed: enabled=%s ssh=%s@%s:%u remote=%s:%u local=%s:%u "
+         "mac_vendor=%s",
          next.tunnelEnabled ? "yes" : "no", next.sshUsername.c_str(),
          next.sshHost.c_str(), static_cast<unsigned int>(next.sshPort),
          next.remoteBindHost.c_str(),
@@ -314,7 +319,8 @@ void applyPendingMinisConfig() {
          mac_vendor::configValue(next.macVendor));
 
   if (!wifi_provisioning::saveManagedConfig(next)) {
-    LOG_E("MINIS", "Unable to store changed cfg.txt; current configuration remains active");
+    LOG_E("MINIS", "Unable to store changed cfg.txt; current configuration "
+                   "remains active");
     return;
   }
 
@@ -341,8 +347,7 @@ void reportStats() {
 
   size_t freeHeap = ESP.getFreeHeap();
   size_t minFreeHeap = ESP.getMinFreeHeap();
-  size_t largestFreeBlock =
-      heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  size_t largestFreeBlock = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
 
   if (freeHeap > 10000) {
     LOGF_I("STATS", "Tunnel State: %s", tunnel.getStateString().c_str());
@@ -356,8 +361,7 @@ void reportStats() {
   static unsigned long lastBytesReceived = 0;
   unsigned long bytesSent = tunnel.getBytesSent();
   unsigned long bytesReceived = tunnel.getBytesReceived();
-  unsigned long sentRate =
-      (bytesSent - lastBytesSent) * 1000 / STATS_INTERVAL;
+  unsigned long sentRate = (bytesSent - lastBytesSent) * 1000 / STATS_INTERVAL;
   unsigned long receivedRate =
       (bytesReceived - lastBytesReceived) * 1000 / STATS_INTERVAL;
   if (freeHeap > 8000) {
@@ -445,6 +449,5 @@ void onChannelClosed(int channel, ChannelCloseReason reason) {
 
 void onTunnelError(int code, const char *detail) {
   status_led::set(status_led::State::Error);
-  LOGF_W("CALLBACK", "Tunnel error %d: %s", code,
-         detail ? detail : "(none)");
+  LOGF_W("CALLBACK", "Tunnel error %d: %s", code, detail ? detail : "(none)");
 }
