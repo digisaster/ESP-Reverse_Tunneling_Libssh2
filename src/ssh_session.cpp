@@ -321,8 +321,6 @@ bool SSHSession::checkConnection() const {
 void SSHSession::resetAcceptState() {
   lastAcceptError_ = 0;
   consecutiveFatalAcceptErrors_ = 0;
-  lastAcceptMs_ = 0;
-  totalAccepts_ = 0;
 #ifdef TUNNEL_DIAG_LOG_ONLY
   acceptDiag_.reset();
 #endif
@@ -331,8 +329,6 @@ void SSHSession::resetAcceptState() {
 void SSHSession::recordAcceptSuccess() {
   lastAcceptError_ = 0;
   consecutiveFatalAcceptErrors_ = 0;
-  lastAcceptMs_ = millis();
-  ++totalAccepts_;
 }
 
 void SSHSession::recordAcceptNoChannel(int err) {
@@ -856,38 +852,10 @@ bool SSHSession::authenticate(const SSHServerConfig &sshConfig) {
     }
     return false;
 
-  } else {
-    LOG_W("SSH", "SSH keys not available in memory, falling back to file-based auth");
-    String keyfile1_str = sshConfig.privateKeyPath + ".pub";
-    const char *keyfile1 = keyfile1_str.c_str();
-    const char *keyfile2 = sshConfig.privateKeyPath.c_str();
-    int fileAuth = 0;
-    if (lock(pdMS_TO_TICKS(1000))) {
-      fileAuth = libssh2_userauth_publickey_fromfile(
-          session_, sshConfig.username.c_str(), keyfile1, keyfile2,
-          sshConfig.password.c_str());
-      if (fileAuth) {
-        char *errmsg = nullptr;
-        int errlen = 0;
-        libssh2_session_last_error(session_, &errmsg, &errlen, 0);
-        String detailStr = "";
-        if (errmsg && errlen > 0) {
-          detailStr = String(errmsg).substring(0, errlen);
-        }
-        unlock();
-        const char *detail = detailStr.length() ? detailStr.c_str() : "Unknown";
-        LOGF_E("SSH", "Auth by public key from file failed: %d, Message: %s",
-               fileAuth, detail);
-        return false;
-      }
-      unlock();
-    } else {
-      LOG_E("SSH", "Session lock timeout during file-based authentication");
-      return false;
-    }
-    LOG_I("SSH", "Authentication by public key from file succeeded");
-    return true;
   }
+
+  LOG_E("SSH", "SSH key authentication selected without an in-memory private key");
+  return false;
 }
 
 bool SSHSession::createListeners(SSHConfiguration *config) {
@@ -988,9 +956,6 @@ bool SSHSession::createListenerForMapping(const TunnelConfig &mapping,
   LOGF_I("SSH", "Reverse listener ready %s:%d (bound %d) -> %s:%d",
          mapping.remoteBindHost.c_str(), mapping.remoteBindPort,
          boundPortResult, mapping.localHost.c_str(), mapping.localPort);
-  if (lastAcceptMs_ == 0) {
-    lastAcceptMs_ = millis();
-  }
   return true;
 }
 
@@ -1011,46 +976,6 @@ void SSHSession::cancelAllListeners() {
   }
   listeners_.clear();
   boundPort_ = -1;
-}
-
-bool SSHSession::relistenStuckListeners(unsigned long nowMs,
-                                        unsigned long thresholdMs) {
-  if (!session_ || socketfd_ < 0 || listeners_.empty()) {
-    return false;
-  }
-  if (thresholdMs == 0 || lastAcceptMs_ == 0 || totalAccepts_ == 0) {
-    return false;
-  }
-  unsigned long idleMs = nowMs - lastAcceptMs_;
-  if (idleMs < thresholdMs) {
-    return false;
-  }
-
-  bool anyRecreated = false;
-  for (auto &entry : listeners_) {
-    if (!entry.listener) {
-      continue;
-    }
-    TunnelConfig mapping = entry.mapping;
-    LOGF_W("SSH",
-           "SERVERDIAG forward_listener_stuck_relisten remote=%s:%d idle_ms=%lu total_accepts=%lu threshold_ms=%lu",
-           mapping.remoteBindHost.c_str(), mapping.remoteBindPort, idleMs,
-           totalAccepts_, thresholdMs);
-    cancelListener(entry);
-    if (createListenerForMapping(mapping, entry)) {
-      anyRecreated = true;
-    } else {
-      LOGF_E("SSH", "Failed to recreate stuck listener for %s:%d — slot left empty",
-             mapping.remoteBindHost.c_str(), mapping.remoteBindPort);
-    }
-  }
-  lastAcceptMs_ = nowMs;
-  lastAcceptError_ = 0;
-  consecutiveFatalAcceptErrors_ = 0;
-#ifdef TUNNEL_DIAG_LOG_ONLY
-  acceptDiag_.reset();
-#endif
-  return anyRecreated;
 }
 
 void SSHSession::cleanupSession() {
