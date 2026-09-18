@@ -18,7 +18,6 @@ struct SSHServerConfig {
   String username;
   String password;
   bool useSSHKey;
-  String privateKeyPath; // Kept for compatibility
   String privateKeyData; // Private key content in memory
   String publicKeyData;  // Public key content in memory
 
@@ -31,8 +30,7 @@ struct SSHServerConfig {
 
   // Default constructor
   SSHServerConfig()
-      : host("your-remote-server.com"), port(22), username("your_username"),
-        password("your_password"), useSSHKey(false), privateKeyPath("/ssh_key"),
+      : host(""), port(22), username(""), password(""), useSSHKey(false),
         privateKeyData(""), publicKeyData(""), verifyHostKey(false),
         expectedHostKeyFingerprint(""), hostKeyType(""),
         onHostKeyMismatch(nullptr), hostKeyMismatchContext(nullptr) {}
@@ -47,8 +45,7 @@ struct TunnelConfig {
 
   // Default constructor
   TunnelConfig()
-      : remoteBindHost("127.0.0.1"), remoteBindPort(8080),
-        localHost("192.168.1.100"), localPort(80) {}
+      : remoteBindHost(""), remoteBindPort(0), localHost(""), localPort(0) {}
 };
 
 // Structure for connection management
@@ -94,20 +91,13 @@ public:
   // SSH configuration methods
   void setSSHServer(const String &host, int port, const String &username,
                     const String &password);
-  void setSSHKeyAuth(const String &host, int port, const String &username,
-                     const String &privateKeyPath,
-                     const String &passphrase = "");
   void setSSHKeyAuthFromMemory(const String &host, int port,
                                const String &username,
                                const String &privateKeyData,
                                const String &publicKeyData,
                                const String &passphrase = "");
 
-  // Utility methods to load keys
-  bool loadSSHKeysFromFile(const String &privateKeyPath);
-  bool loadSSHKeysFromLittleFS(const String &privateKeyPath);
-  void setSSHKeysInMemory(const String &privateKeyData,
-                          const String &publicKeyData);
+  // Key validation/diagnostics for the in-memory authentication path.
   bool validateSSHKeys() const;
   void diagnoseSSHKeys() const;
 
@@ -184,34 +174,5 @@ private:
 
 // Global configuration instance
 extern SSHConfiguration globalSSHConfig;
-
-// Compatibility macros for legacy code (optional)
-#define SSH_HOST globalSSHConfig.getSSHConfig().host.c_str()
-#define SSH_PORT globalSSHConfig.getSSHConfig().port
-#define SSH_USERNAME globalSSHConfig.getSSHConfig().username.c_str()
-#define SSH_PASSWORD globalSSHConfig.getSSHConfig().password.c_str()
-#define USE_SSH_KEY globalSSHConfig.getSSHConfig().useSSHKey
-#define SSH_PRIVATE_KEY_PATH                                                   \
-  globalSSHConfig.getSSHConfig().privateKeyPath.c_str()
-
-#define REMOTE_BIND_HOST                                                       \
-  globalSSHConfig.getTunnelConfig().remoteBindHost.c_str()
-#define REMOTE_BIND_PORT globalSSHConfig.getTunnelConfig().remoteBindPort
-#define LOCAL_HOST globalSSHConfig.getTunnelConfig().localHost.c_str()
-#define LOCAL_PORT globalSSHConfig.getTunnelConfig().localPort
-
-#define KEEPALIVE_INTERVAL_SEC                                                 \
-  globalSSHConfig.getConnectionConfig().keepAliveIntervalSec
-#define RECONNECT_DELAY_MS                                                     \
-  globalSSHConfig.getConnectionConfig().reconnectDelayMs
-#define MAX_RECONNECT_ATTEMPTS                                                 \
-  globalSSHConfig.getConnectionConfig().maxReconnectAttempts
-#define CONNECTION_TIMEOUT_SEC                                                 \
-  globalSSHConfig.getConnectionConfig().connectionTimeoutSec
-#define BUFFER_SIZE globalSSHConfig.getConnectionConfig().bufferSize
-#define MAX_CHANNELS globalSSHConfig.getConnectionConfig().maxChannels
-
-#define DEBUG_ENABLED globalSSHConfig.getDebugConfig().debugEnabled
-#define SERIAL_BAUD_RATE globalSSHConfig.getDebugConfig().serialBaudRate
 
 #endif
