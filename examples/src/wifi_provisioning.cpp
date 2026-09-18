@@ -551,15 +551,6 @@ bool saveManagedConfig(const DeviceRuntimeConfig &config) {
   if (!config.setupComplete) return false;
   return writeConfig(config);
 }
-void finishManagedSetup() {
-  transitionPending = false;
-  removeIfExists(EDIT_REQUEST_PATH);
-  configEditRequested = false;
-  stopServices();
-  WiFi.softAPdisconnect(true);
-  WiFi.mode(WIFI_STA);
-  LOG_I("SETUP", "Managed configuration active; setup portal closed");
-}
 bool isActive() { return mode != PortalMode::None; }
 bool editRequested() { return configEditRequested; }
 void pollConfigResetButton() {
