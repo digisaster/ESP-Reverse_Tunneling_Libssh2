@@ -4,6 +4,8 @@
 
 namespace minis_registration {
 
+constexpr char FIRMWARE_VERSION[] = "1.0.0-beta.1";
+
 struct ManagedTunnelConfig {
   bool enabled = false;
   String sshHost;

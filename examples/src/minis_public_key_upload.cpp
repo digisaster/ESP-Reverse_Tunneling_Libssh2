@@ -163,7 +163,7 @@ bool storeGenesisMarker(const String &keyTag) {
 String buildGenesisReport(const String &sid, const String &publicKey,
                           const String &keyTag) {
   String report;
-  report.reserve(832);
+  report.reserve(880);
   report += "==== MHB GENESIS REPORT ====\n";
   report += "Client-Type: ESP32\n";
   report += "SID: ";
@@ -176,6 +176,8 @@ String buildGenesisReport(const String &sid, const String &publicKey,
   report += ESP.getChipModel();
   report += " rev ";
   report += String(ESP.getChipRevision());
+  report += "\nFirmware-Version: ";
+  report += minis_registration::FIRMWARE_VERSION;
   report += "\nFirmware-Build: ";
   report += __DATE__;
   report += " ";

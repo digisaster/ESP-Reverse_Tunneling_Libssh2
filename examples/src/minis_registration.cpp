@@ -19,7 +19,6 @@ constexpr const char *MINIS_HOST = "cloud.supcom.nl";
 constexpr uint16_t MINIS_HTTPS_PORT = 443;
 constexpr const char *MINIS_PATH = "/hb/";
 constexpr const char *MINIS_BASE_URL = "https://cloud.supcom.nl/hb/";
-constexpr const char *MINIS_USER_AGENT = "MHB;vESP32";
 constexpr uint32_t MINIS_TIMEOUT_MS = 5000;
 constexpr uint16_t ONBOARDING_HEARTBEAT_INTERVAL_MIN = 2;
 constexpr uint16_t MIN_HEARTBEAT_INTERVAL_MIN = 2;
@@ -189,9 +188,9 @@ int performGet(const char *suffix, char *response, size_t responseCapacity,
   secureClient.print(suffix);
   secureClient.print(F(" HTTP/1.1\r\nHost: "));
   secureClient.print(MINIS_HOST);
-  secureClient.print(F("\r\nUser-Agent: "));
-  secureClient.print(MINIS_USER_AGENT);
-  secureClient.print(F("\r\nConnection: close\r\n\r\n"));
+  secureClient.print(F("\r\nUser-Agent: MHB;v"));
+  secureClient.print(FIRMWARE_VERSION);
+  secureClient.print(F(";ESP32;embedded\r\nConnection: close\r\n\r\n"));
 
   char line[96] = {0};
   const size_t statusLength =
