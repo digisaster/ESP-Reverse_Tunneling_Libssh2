@@ -324,6 +324,11 @@ void applyPendingMinisConfig() {
     return;
   }
 
+  if (!minis_registration::markConfigAppliedNotice()) {
+    LOG_W("MINIS",
+          "cfg.txt was stored, but its post-restart notification marker failed");
+  }
+
   LOG_I("MINIS", "Changed cfg.txt stored; restarting to apply it cleanly");
   delay(250);
   ESP.restart();

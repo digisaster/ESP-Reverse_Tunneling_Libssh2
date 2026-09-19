@@ -39,6 +39,11 @@ bool startHeartbeatTask();
 bool queueAlert(const char *level, const char *title, const char *message,
                 const char *tag = nullptr);
 
+// Persists a one-shot notice before the mandatory restart that follows a
+// successfully stored managed cfg.txt change. The background task turns this
+// into an alert after reboot and clears the marker only after HTTP 200.
+bool markConfigAppliedNotice();
+
 // Returns the latest complete tunnel config received from Minis. MAC_VENDOR is
 // optional; absent means keep the locally selected WiFi MAC profile.
 bool takeManagedTunnelConfig(ManagedTunnelConfig &config);

@@ -16,6 +16,9 @@ This is the candidate baseline for `esp32tun` reference firmware
   existing Minis alert endpoint only by the background control-plane task, so
   alert producers never open their own TLS session and the existing TLS memory
   guard remains authoritative.
+- Successful first Genesis upload now emits an informational Minis alert.
+  Managed cfg.txt changes persist a one-shot notice before restart; the alert is
+  sent after reboot and its marker is cleared only after successful delivery.
 - Added a minimal, non-blocking status LED for the ESP32-C3 reference profile.
   It distinguishes missing configuration, active setup, connection attempts,
   an established tunnel, and connection or authentication errors.

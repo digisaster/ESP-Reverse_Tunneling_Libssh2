@@ -25,6 +25,7 @@ constexpr char WIFI_RESET_REQUEST_PATH[] = "/esp32tun.wifi_reset";
 constexpr char MINIS_CONFIG_PATH[] = "/minis.cfg";
 constexpr char MINIS_CONFIG_TEMP_PATH[] = "/minis.cfg.tmp";
 constexpr char MINIS_CONFIG_BACKUP_PATH[] = "/minis.cfg.bak";
+constexpr char MINIS_CFG_APPLIED_NOTICE_PATH[] = "/minis.cfg_applied_notice";
 constexpr unsigned long WIFI_TIMEOUT_MS = 20000;
 constexpr size_t MAX_KEY_SIZE = 16384;
 constexpr size_t MAX_PUBLIC_KEY_SIZE = 4096;
@@ -893,6 +894,7 @@ void pollConfigResetButton() {
   removeIfExists(MINIS_CONFIG_PATH);
   removeIfExists(MINIS_CONFIG_TEMP_PATH);
   removeIfExists(MINIS_CONFIG_BACKUP_PATH);
+  removeIfExists(MINIS_CFG_APPLIED_NOTICE_PATH);
 
   // A true factory reset must also forget credentials persisted by the ESP32
   // WiFi stack in NVS. Keep this separate from normal edit/restart behavior.

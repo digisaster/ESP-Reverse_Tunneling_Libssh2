@@ -31,6 +31,7 @@ constexpr size_t MAX_MAC_VENDOR_LENGTH = 16;
 constexpr size_t MINIS_TLS_MIN_LARGEST_BLOCK = 31 * 1024;
 constexpr size_t MINIS_TLS_MIN_FREE_HEAP = 70 * 1024;
 constexpr const char *MINIS_ALERT_PATH = "/uploot.php";
+constexpr const char *CONFIG_APPLIED_NOTICE_PATH = "/minis.cfg_applied_notice";
 constexpr UBaseType_t ALERT_QUEUE_DEPTH = 4;
 constexpr size_t ALERT_LEVEL_SIZE = 9;
 constexpr size_t ALERT_TITLE_SIZE = 97;
@@ -50,6 +51,7 @@ struct QueuedAlert {
   char title[ALERT_TITLE_SIZE];
   char message[ALERT_MESSAGE_SIZE];
   char tag[ALERT_TAG_SIZE];
+  bool clearConfigAppliedNotice = false;
 };
 
 enum class AlertSendResult { None, Sent, Deferred };
@@ -262,6 +264,27 @@ int performAlertPost(const QueuedAlert &alert) {
   return status;
 }
 
+bool queueConfigAppliedNoticeIfNeeded() {
+  if (alertQueue == nullptr || !LittleFS.exists(CONFIG_APPLIED_NOTICE_PATH))
+    return true;
+
+  QueuedAlert alert{};
+  strlcpy(alert.level, "info", sizeof(alert.level));
+  strlcpy(alert.title, "ESP32 cfg.txt toegepast", sizeof(alert.title));
+  strlcpy(alert.message,
+          "Nieuwe Minis cfg.txt is opgeslagen en na herstart toegepast.",
+          sizeof(alert.message));
+  strlcpy(alert.tag, "cfg-applied", sizeof(alert.tag));
+  alert.clearConfigAppliedNotice = true;
+
+  if (xQueueSend(alertQueue, &alert, 0) != pdPASS) {
+    LOG_W("MINIS", "Config-applied notice retained: alert queue is full");
+    return false;
+  }
+  LOG_I("MINIS", "Persistent cfg.txt applied notice queued");
+  return true;
+}
+
 AlertSendResult sendNextQueuedAlert() {
   if (alertQueue == nullptr)
     return AlertSendResult::None;
@@ -282,6 +305,13 @@ AlertSendResult sendNextQueuedAlert() {
   if (xQueueReceive(alertQueue, &delivered, 0) != pdPASS) {
     LOG_W("MINIS", "Alert POST succeeded but queue head could not be removed");
     return AlertSendResult::Deferred;
+  }
+
+  if (delivered.clearConfigAppliedNotice &&
+      LittleFS.exists(CONFIG_APPLIED_NOTICE_PATH) &&
+      !LittleFS.remove(CONFIG_APPLIED_NOTICE_PATH)) {
+    LOG_W("MINIS",
+          "Config-applied alert delivered, but persistent marker remains");
   }
 
   LOGF_I("MINIS", "Alert delivered: level=%s tag=%s title=%s", delivered.level,
@@ -772,6 +802,7 @@ uint32_t nextHeartbeatDelaySeconds() {
 
 void heartbeatTask(void *) {
   loadCachedHeartbeatInterval();
+  queueConfigAppliedNoticeIfNeeded();
   vTaskDelay(pdMS_TO_TICKS(INITIAL_CONFIG_DELAY_MS));
   refreshConfig();
   sendNextQueuedAlert();
@@ -854,6 +885,22 @@ bool startHeartbeatTask() {
     vQueueDelete(alertQueue);
     alertQueue = nullptr;
     LOG_W("MINIS", "Unable to start heartbeat task");
+    return false;
+  }
+  return true;
+}
+
+bool markConfigAppliedNotice() {
+  File marker = LittleFS.open(CONFIG_APPLIED_NOTICE_PATH, "w");
+  if (!marker) {
+    LOG_W("MINIS", "Unable to store cfg.txt applied notification marker");
+    return false;
+  }
+  const size_t written = marker.print(FIRMWARE_VERSION);
+  marker.flush();
+  marker.close();
+  if (written == 0) {
+    LOG_W("MINIS", "cfg.txt applied notification marker write failed");
     return false;
   }
   return true;

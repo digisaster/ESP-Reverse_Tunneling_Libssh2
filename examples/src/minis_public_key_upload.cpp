@@ -231,6 +231,14 @@ void uploadGenesisIfNeeded(const String &sid, const String &publicKey) {
     LOG_W("MINIS", "Genesis upload succeeded but local marker could not be "
                    "stored; a later boot may upload it again");
   }
+
+  const String genesisMessage =
+      String("Genesis succesvol opgeslagen; firmware v") +
+      minis_registration::FIRMWARE_VERSION + ".";
+  if (!minis_registration::queueAlert("info", "ESP32 geregistreerd",
+                                      genesisMessage.c_str(), "genesis")) {
+    LOG_W("MINIS", "Genesis alert could not be queued");
+  }
 }
 } // namespace
 
