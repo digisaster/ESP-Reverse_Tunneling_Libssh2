@@ -12,6 +12,10 @@ This is the candidate baseline for `esp32tun` reference firmware
 
 ### Added
 
+- Added a bounded ESP32-to-Minis alert queue. Runtime alerts are posted to the
+  existing Minis alert endpoint only by the background control-plane task, so
+  alert producers never open their own TLS session and the existing TLS memory
+  guard remains authoritative.
 - Added a minimal, non-blocking status LED for the ESP32-C3 reference profile.
   It distinguishes missing configuration, active setup, connection attempts,
   an established tunnel, and connection or authentication errors.

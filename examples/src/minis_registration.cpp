@@ -30,13 +30,29 @@ constexpr size_t MAX_CONFIG_HOST_LENGTH = 253;
 constexpr size_t MAX_MAC_VENDOR_LENGTH = 16;
 constexpr size_t MINIS_TLS_MIN_LARGEST_BLOCK = 31 * 1024;
 constexpr size_t MINIS_TLS_MIN_FREE_HEAP = 70 * 1024;
+constexpr const char *MINIS_ALERT_PATH = "/uploot.php";
+constexpr UBaseType_t ALERT_QUEUE_DEPTH = 4;
+constexpr size_t ALERT_LEVEL_SIZE = 9;
+constexpr size_t ALERT_TITLE_SIZE = 97;
+constexpr size_t ALERT_MESSAGE_SIZE = 257;
+constexpr size_t ALERT_TAG_SIZE = 49;
 constexpr const char *CACHED_CONFIG_PATH = "/minis.cfg";
 constexpr const char *CACHED_CONFIG_TEMP_PATH = "/minis.cfg.tmp";
 constexpr const char *CACHED_CONFIG_BACKUP_PATH = "/minis.cfg.bak";
 
 TaskHandle_t heartbeatTaskHandle = nullptr;
 QueueHandle_t managedConfigQueue = nullptr;
+QueueHandle_t alertQueue = nullptr;
 uint16_t heartbeatIntervalMin = ONBOARDING_HEARTBEAT_INTERVAL_MIN;
+
+struct QueuedAlert {
+  char level[ALERT_LEVEL_SIZE];
+  char title[ALERT_TITLE_SIZE];
+  char message[ALERT_MESSAGE_SIZE];
+  char tag[ALERT_TAG_SIZE];
+};
+
+enum class AlertSendResult { None, Sent, Deferred };
 
 struct QueuedManagedConfig {
   bool enabled;
@@ -160,6 +176,117 @@ bool parseUnsigned(const char *text, uint32_t &value) {
     return false;
   value = parsed;
   return true;
+}
+
+void appendFormEncoded(String &out, const char *value) {
+  static constexpr char HEX[] = "0123456789ABCDEF";
+  if (value == nullptr)
+    return;
+  while (*value != '\0') {
+    const uint8_t c = static_cast<uint8_t>(*value++);
+    const bool unreserved =
+        (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' ||
+        c == '~';
+    if (unreserved) {
+      out += static_cast<char>(c);
+    } else if (c == ' ') {
+      out += '+';
+    } else {
+      out += '%';
+      out += HEX[(c >> 4) & 0x0F];
+      out += HEX[c & 0x0F];
+    }
+  }
+}
+
+void appendFormField(String &body, const char *name, const char *value) {
+  if (!body.isEmpty())
+    body += '&';
+  body += name;
+  body += '=';
+  appendFormEncoded(body, value);
+}
+
+int performAlertPost(const QueuedAlert &alert) {
+  if (WiFi.status() != WL_CONNECTED)
+    return -3;
+  if (!tlsMemoryAvailable("ALERT"))
+    return -2;
+
+  const String clientSid = sid();
+  String body;
+  body.reserve(640);
+  appendFormField(body, "sid", clientSid.c_str());
+  appendFormField(body, "alert_level", alert.level);
+  appendFormField(body, "alert_title", alert.title);
+  appendFormField(body, "alert_message", alert.message);
+  appendFormField(body, "alert_tag", alert.tag);
+
+  logTlsHeap("alert-before");
+  WiFiClientSecure secureClient;
+  secureClient.setInsecure();
+  secureClient.setTimeout(MINIS_TIMEOUT_MS);
+  if (!secureClient.connect(MINIS_HOST, MINIS_HTTPS_PORT, MINIS_TIMEOUT_MS)) {
+    logTlsHeap("alert-connect-failed");
+    secureClient.stop();
+    return -1;
+  }
+
+  secureClient.print(F("POST "));
+  secureClient.print(MINIS_ALERT_PATH);
+  secureClient.print(F(" HTTP/1.1\r\nHost: "));
+  secureClient.print(MINIS_HOST);
+  secureClient.print(F("\r\nUser-Agent: MHB;v"));
+  secureClient.print(FIRMWARE_VERSION);
+  secureClient.print(F(";ESP32;alert\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: "));
+  secureClient.print(body.length());
+  secureClient.print(F("\r\nConnection: close\r\n\r\n"));
+  secureClient.print(body);
+
+  const unsigned long deadline = millis() + MINIS_TIMEOUT_MS;
+  while (!secureClient.available() && secureClient.connected() &&
+         static_cast<long>(deadline - millis()) > 0) {
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  if (!secureClient.available()) {
+    secureClient.stop();
+    return -1;
+  }
+
+  char statusLine[96] = {0};
+  const size_t statusLength =
+      secureClient.readBytesUntil('\n', statusLine, sizeof(statusLine) - 1);
+  const int status = parseHttpStatus(statusLine, statusLength);
+  secureClient.stop();
+  return status;
+}
+
+AlertSendResult sendNextQueuedAlert() {
+  if (alertQueue == nullptr)
+    return AlertSendResult::None;
+
+  QueuedAlert alert{};
+  if (xQueuePeek(alertQueue, &alert, 0) != pdPASS)
+    return AlertSendResult::None;
+
+  const int status = performAlertPost(alert);
+  if (status != 200) {
+    LOGF_W("MINIS",
+           "Alert delivery deferred (HTTP/status %d); queued message retained",
+           status);
+    return AlertSendResult::Deferred;
+  }
+
+  QueuedAlert delivered{};
+  if (xQueueReceive(alertQueue, &delivered, 0) != pdPASS) {
+    LOG_W("MINIS", "Alert POST succeeded but queue head could not be removed");
+    return AlertSendResult::Deferred;
+  }
+
+  LOGF_I("MINIS", "Alert delivered: level=%s tag=%s title=%s", delivered.level,
+         delivered.tag, delivered.title);
+  return AlertSendResult::Sent;
 }
 
 int performGet(const char *suffix, char *response, size_t responseCapacity,
@@ -647,14 +774,44 @@ void heartbeatTask(void *) {
   loadCachedHeartbeatInterval();
   vTaskDelay(pdMS_TO_TICKS(INITIAL_CONFIG_DELAY_MS));
   refreshConfig();
+  sendNextQueuedAlert();
 
   while (true) {
     const uint32_t delaySeconds = nextHeartbeatDelaySeconds();
+    TickType_t heartbeatRemaining =
+        pdMS_TO_TICKS(static_cast<uint64_t>(delaySeconds) * 1000ULL);
     LOGF_I("MINIS", "Next heartbeat/config check in %lu min %lu sec",
            static_cast<unsigned long>(delaySeconds / 60U),
            static_cast<unsigned long>(delaySeconds % 60U));
-    vTaskDelay(pdMS_TO_TICKS(static_cast<uint64_t>(delaySeconds) * 1000ULL));
+
+    while (heartbeatRemaining > 0) {
+      const TickType_t waitStarted = xTaskGetTickCount();
+      const uint32_t notified =
+          ulTaskNotifyTake(pdFALSE, heartbeatRemaining);
+      if (notified > 0) {
+        const AlertSendResult result = sendNextQueuedAlert();
+        if (result == AlertSendResult::Deferred) {
+          // Avoid repeated connection attempts for multiple queued alerts after
+          // one failure. Retain the queue and retry at the next heartbeat or a
+          // later newly queued alert.
+          ulTaskNotifyTake(pdTRUE, 0);
+        }
+      }
+
+      const TickType_t elapsed = xTaskGetTickCount() - waitStarted;
+      if (elapsed >= heartbeatRemaining) {
+        heartbeatRemaining = 0;
+      } else {
+        heartbeatRemaining -= elapsed;
+      }
+    }
+
     refreshConfig();
+    const AlertSendResult result = sendNextQueuedAlert();
+    if (result == AlertSendResult::Sent && alertQueue != nullptr &&
+        uxQueueMessagesWaiting(alertQueue) > 0) {
+      xTaskNotifyGive(heartbeatTaskHandle);
+    }
   }
 }
 
@@ -680,14 +837,67 @@ bool startHeartbeatTask() {
       return false;
     }
   }
+  if (alertQueue == nullptr) {
+    alertQueue = xQueueCreate(ALERT_QUEUE_DEPTH, sizeof(QueuedAlert));
+    if (alertQueue == nullptr) {
+      vQueueDelete(managedConfigQueue);
+      managedConfigQueue = nullptr;
+      LOG_W("MINIS", "Unable to create alert queue");
+      return false;
+    }
+  }
   if (xTaskCreate(heartbeatTask, "minis_hb", HEARTBEAT_TASK_STACK_BYTES,
                   nullptr, 1, &heartbeatTaskHandle) != pdPASS) {
     heartbeatTaskHandle = nullptr;
     vQueueDelete(managedConfigQueue);
     managedConfigQueue = nullptr;
+    vQueueDelete(alertQueue);
+    alertQueue = nullptr;
     LOG_W("MINIS", "Unable to start heartbeat task");
     return false;
   }
+  return true;
+}
+
+bool queueAlert(const char *level, const char *title, const char *message,
+                const char *tag) {
+  if (heartbeatTaskHandle == nullptr || alertQueue == nullptr) {
+    LOG_W("MINIS", "Alert queue unavailable: control-plane task is not running");
+    return false;
+  }
+  if (level == nullptr || message == nullptr || message[0] == '\0') {
+    LOG_W("MINIS", "Alert rejected: level/message is missing");
+    return false;
+  }
+
+  const char *normalizedLevel = nullptr;
+  if (strcmp(level, "info") == 0) {
+    normalizedLevel = "info";
+  } else if (strcmp(level, "warn") == 0 || strcmp(level, "warning") == 0) {
+    normalizedLevel = "warn";
+  } else if (strcmp(level, "critical") == 0 || strcmp(level, "error") == 0) {
+    normalizedLevel = "critical";
+  } else {
+    LOGF_W("MINIS", "Alert rejected: unsupported level '%s'", level);
+    return false;
+  }
+
+  QueuedAlert alert{};
+  strlcpy(alert.level, normalizedLevel, sizeof(alert.level));
+  if (title != nullptr)
+    strlcpy(alert.title, title, sizeof(alert.title));
+  strlcpy(alert.message, message, sizeof(alert.message));
+  if (tag != nullptr)
+    strlcpy(alert.tag, tag, sizeof(alert.tag));
+
+  if (xQueueSend(alertQueue, &alert, 0) != pdPASS) {
+    LOG_W("MINIS", "Alert queue full; message not queued");
+    return false;
+  }
+
+  xTaskNotifyGive(heartbeatTaskHandle);
+  LOGF_I("MINIS", "Alert queued: level=%s tag=%s title=%s", alert.level,
+         alert.tag, alert.title);
   return true;
 }
 

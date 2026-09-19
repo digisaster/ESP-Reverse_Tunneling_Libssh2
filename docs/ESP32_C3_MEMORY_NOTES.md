@@ -46,6 +46,12 @@ Connection: close
 There is no separate periodic `HEAD /ping` request and no persistent heartbeat
 TLS connection.
 
+Runtime ESP32-to-Minis alerts must not create a second TLS worker. Alert
+producers enqueue bounded messages only; the existing Minis background task
+owns delivery to `/uploot.php` and applies the same TLS memory guard as the
+heartbeat/config request. Failed/deferred delivery leaves the message queued
+for a later control-plane opportunity.
+
 A changed valid managed configuration is persisted and applied after
 `ESP.restart()`. There is no live tunnel replacement or control-plane
 pause/resume state machine.

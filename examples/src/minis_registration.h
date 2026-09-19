@@ -31,6 +31,14 @@ bool registerClient();
 // does not have enough free/contiguous heap.
 bool startHeartbeatTask();
 
+// Queues a small alert for delivery to the existing Minis alert endpoint.
+// This call never opens a network connection. Runtime HTTPS delivery is owned
+// exclusively by the Minis background task and obeys the same TLS memory guard
+// as heartbeat/config traffic. Returns false when the service is not running,
+// the arguments are invalid, or the bounded queue is full.
+bool queueAlert(const char *level, const char *title, const char *message,
+                const char *tag = nullptr);
+
 // Returns the latest complete tunnel config received from Minis. MAC_VENDOR is
 // optional; absent means keep the locally selected WiFi MAC profile.
 bool takeManagedTunnelConfig(ManagedTunnelConfig &config);
